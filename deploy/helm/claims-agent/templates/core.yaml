@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: claims-agent
+  labels: {{- include "ca.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "ca.labels" . | nindent 4 }}
+  ports: [{ port: 80, targetPort: http, name: http }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: claims-agent-checkpoints }
+spec:
+  accessModes: [{{ if .Values.checkpoints.storageClass }}ReadWriteMany{{ else }}ReadWriteOnce{{ end }}]
+  {{- if .Values.checkpoints.storageClass }}
+  storageClassName: {{ .Values.checkpoints.storageClass }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.checkpoints.size }} } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: claims-agent }
+spec:
+  {{- if .Capabilities.APIVersions.Has "argoproj.io/v1alpha1" }}
+  scaleTargetRef: { apiVersion: argoproj.io/v1alpha1, kind: Rollout, name: claims-agent }
+  {{- else }}
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: claims-agent }
+  {{- end }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.targetCPU }} } } }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: claims-agent }
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {{- include "ca.labels" . | nindent 6 }}
+---
+# Default deny; only the ingress namespace may call in, only DNS, OTLP and HTTPS egress allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: claims-agent }
+spec:
+  podSelector:
+    matchLabels: {{- include "ca.labels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress } } }]
+      ports: [{ port: 8080 }]
+  egress:
+    - ports: [{ port: 53, protocol: UDP }, { port: 4318 }, { port: 443 }]

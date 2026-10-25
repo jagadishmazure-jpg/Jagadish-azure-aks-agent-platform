@@ -1,0 +1,21 @@
+# Argo CD pulls the chart from this repo and keeps the cluster in sync (GitOps). Not applied by CI.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: claims-agent
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/jagadishmazure-jpg/Jagadish-azure-aks-agent-platform.git
+    targetRevision: main
+    path: deploy/helm/claims-agent
+    helm:
+      valueFiles: [values.yaml]
+      parameters:
+        - { name: checkpoints.storageClass, value: azurefile-csi }
+        - { name: env, value: prod }
+  destination: { server: https://kubernetes.default.svc, namespace: claims }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

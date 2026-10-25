@@ -1,0 +1,16 @@
+{{- if .Capabilities.APIVersions.Has "argoproj.io/v1alpha1" }}
+# Canary health: abort when the 5xx share goes over 2% twice (interval 30s). Mirrors sim.simulate_rollback.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata: { name: claims-agent-health }
+spec:
+  metrics:
+    - name: error-rate
+      interval: 30s
+      failureLimit: 2
+      successCondition: result[0] < 0.02
+      provider:
+        prometheus:
+          address: http://prometheus.observability:9090
+          query: sum(rate(http_requests_total{app="claims-agent",code=~"5.."}[1m])) / sum(rate(http_requests_total{app="claims-agent"}[1m]))
+{{- end }}

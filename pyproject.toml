@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nfclaims"
+version = "0.1.0"
+description = "Fictional insurer claims agents on Microsoft Agent Framework, packaged for AKS"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "agent-framework-core==1.23.0",
+  "agent-framework-openai==1.17.0",
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+  "httpx==0.28.1",
+  "opentelemetry-sdk==1.45.1",
+  "prometheus_client==0.26.0",
+  "pydantic==2.14.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "ruff==0.17.2", "matplotlib==3.11.2", "pyyaml>=6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101", "S311", "S104", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]
+"scripts/*" = ["S603", "S607", "S310", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

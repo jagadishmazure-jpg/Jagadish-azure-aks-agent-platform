@@ -1,0 +1,57 @@
+{
+  "claims_run": {
+    "claims": 300,
+    "finished_on_other_pod": 178,
+    "model": "stub",
+    "outcomes": {
+      "auto_paid": 107,
+      "denied_by_adjuster": 48,
+      "denied_no_coverage": 15,
+      "paid_after_review": 130
+    },
+    "paused_for_adjuster": 178,
+    "tokens_in": 12926,
+    "tokens_out": 5506,
+    "trace_continuity": 1.0
+  },
+  "cost": {
+    "model": "stub",
+    "per_1000_requests_usd": 0.0175,
+    "per_request_usd": 1.747e-05,
+    "prices_as_of": "2026-10-25",
+    "total_usd": 0.005242
+  },
+  "injection": {
+    "attacks": 96,
+    "benign": 100,
+    "block_rate": 1.0,
+    "blocked": 96,
+    "false_positive_rate": 0.0,
+    "false_positives": 0
+  },
+  "label": "simulated / synthetic: 300 synthetic claims, in-process pods, stub model unless model says otherwise",
+  "pii_leaks": {
+    "logs_and_errors": 0,
+    "outputs": 0,
+    "spans": 0
+  },
+  "pod_kill_baseline_pod_local_storage": {
+    "claims": 60,
+    "finished_on_other_pod": 0,
+    "paused_for_adjuster": 37,
+    "trace_continuity": 0.0
+  },
+  "rollback_simulated": {
+    "max_s": 160.3,
+    "p50_s": 61.1,
+    "p95_s": 100.7,
+    "params": {
+      "abort_s": 12.0,
+      "analysis_interval_s": 30.0,
+      "failure_limit": 2,
+      "p_detect": 0.9
+    },
+    "trials": 500
+  },
+  "span_trace_continuity": 1.0
+}

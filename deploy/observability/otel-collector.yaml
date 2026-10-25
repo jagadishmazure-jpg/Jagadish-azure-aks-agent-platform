@@ -1,0 +1,16 @@
+# OpenTelemetry Collector: receives OTLP from the pods, drops attributes that could carry raw claim
+# text, then exports traces to Tempo (kind) or Azure Monitor (AKS) and metrics to Prometheus.
+receivers:
+  otlp: { protocols: { http: { endpoint: 0.0.0.0:4318 } } }
+processors:
+  batch: {}
+  attributes/strip:
+    actions:
+      - { key: claim.description, action: delete }
+      - { key: http.request.body, action: delete }
+exporters:
+  otlphttp/tempo: { endpoint: http://tempo.observability:4318 }
+  prometheus: { endpoint: 0.0.0.0:9464 }
+service:
+  pipelines:
+    traces: { receivers: [otlp], processors: [attributes/strip, batch], exporters: [otlphttp/tempo] }

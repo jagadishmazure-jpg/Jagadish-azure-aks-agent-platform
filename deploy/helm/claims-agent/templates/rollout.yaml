@@ -1,0 +1,63 @@
+# Deployment on plain clusters (kind smoke test); Argo Rollouts canary when rollouts are installed.
+{{- $kind := ternary "Rollout" "Deployment" (.Capabilities.APIVersions.Has "argoproj.io/v1alpha1") }}
+apiVersion: {{ ternary "argoproj.io/v1alpha1" "apps/v1" (eq $kind "Rollout") }}
+kind: {{ $kind }}
+metadata:
+  name: claims-agent
+  labels: {{- include "ca.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "ca.labels" . | nindent 6 }}
+  {{- if eq $kind "Rollout" }}
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - analysis: { templates: [{ templateName: claims-agent-health }] }
+        - setWeight: 50
+        - pause: { duration: 60s }
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "ca.labels" . | nindent 8 }}
+        {{- if .Values.workloadIdentity.clientId }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      serviceAccountName: claims-agent
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8080, name: http }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          env:
+            - { name: APP_ENV, value: {{ .Values.env | quote }} }
+            - { name: CHECKPOINT_DIR, value: /data/checkpoints }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.otlpEndpoint | quote }} }
+            - { name: AZURE_OPENAI_DEPLOYMENT, value: {{ .Values.model.deployment | quote }} }
+            - { name: AZURE_OPENAI_API_VERSION, value: {{ .Values.model.apiVersion | quote }} }
+            {{- if .Values.model.endpoint }}
+            - { name: AZURE_OPENAI_ENDPOINT, value: {{ .Values.model.endpoint | quote }} }
+            {{- end }}
+            {{- if .Values.model.keySecretName }}
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.model.keySecretName }}, key: api-key } }
+            {{- end }}
+            - name: DEV_TOKEN_KEY
+              valueFrom: { secretKeyRef: { name: claims-agent-dev, key: dev-token-key, optional: true } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: checkpoints, mountPath: /data/checkpoints }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim: { claimName: claims-agent-checkpoints }
+        - name: tmp
+          emptyDir: {}

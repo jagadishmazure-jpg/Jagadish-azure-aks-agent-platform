@@ -1,0 +1,18 @@
+{
+  "title": "Northfield Mutual claims agents (fictional)",
+  "uid": "nf-claims",
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    { "type": "timeseries", "title": "Claims by outcome / min", "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (status) (rate(nf_claims_total[1m])) * 60" }] },
+    { "type": "stat", "title": "Injection blocks (1h)", "gridPos": { "x": 12, "y": 0, "w": 6, "h": 8 },
+      "targets": [{ "expr": "increase(nf_injection_blocked_total[1h])" }] },
+    { "type": "stat", "title": "Model cost USD (1h, list price)", "gridPos": { "x": 18, "y": 0, "w": 6, "h": 8 },
+      "targets": [{ "expr": "(increase(nf_model_tokens_total{direction=\"in\"}[1h]) * 0.15 + increase(nf_model_tokens_total{direction=\"out\"}[1h]) * 0.60) / 1e6" }] },
+    { "type": "timeseries", "title": "Claim latency p95 (s)", "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(nf_claim_seconds_bucket[5m])))" }] },
+    { "type": "timeseries", "title": "Human review share", "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum(rate(nf_claims_total{status=~\".*review|.*adjuster\"}[5m])) / sum(rate(nf_claims_total[5m]))" }] }
+  ]
+}

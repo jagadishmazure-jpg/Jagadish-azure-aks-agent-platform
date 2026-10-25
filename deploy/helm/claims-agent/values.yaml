@@ -1,0 +1,24 @@
+image:
+  repository: nfclaimsacr.azurecr.io/claims-agent   # kind: claims-agent (loaded locally)
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+replicas: 3
+# Azure: workload identity client id of the user-assigned identity (from Terraform output). Empty on kind.
+workloadIdentity:
+  clientId: ""
+# Model settings. The API key is NEVER a value here: on AKS it comes from Key Vault through the
+# Secrets Store CSI driver; on kind the stub model is used.
+model:
+  endpoint: ""
+  deployment: "gpt-4o-mini"
+  apiVersion: "2024-10-21"
+  keySecretName: ""        # name of a Kubernetes Secret synced from Key Vault, optional
+env: dev
+otlpEndpoint: "http://otel-collector.observability:4318"
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: "1", memory: 512Mi }
+autoscaling: { minReplicas: 3, maxReplicas: 10, targetCPU: 70 }
+checkpoints:
+  storageClass: ""          # RWX class; AKS: azurefile-csi. Postgres store is planned.
+  size: 1Gi
