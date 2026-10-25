@@ -11,7 +11,7 @@
 <!-- numbers:start -->
 | Measure (simulated / synthetic, stub model) | Result |
 | --- | --- |
-| Automated tests | **151** |
+| Automated tests | **152** |
 | Synthetic claims run end to end | 300 (auto_paid 107, denied_by_adjuster 48, denied_no_coverage 15, paid_after_review 130) |
 | Paused for a human adjuster | 178 of 300 |
 | Trace continuity after pod kill, shared checkpoints | 100% (178 of 178 finished on another pod) |

@@ -125,3 +125,10 @@ def test_env_example_has_empty_secrets():
 
 def test_gitignore_env():
     assert ".env" in (ROOT / ".gitignore").read_text().split()
+
+
+def test_cluster_exporter_is_installed():
+    # The Helm chart sets OTEL_EXPORTER_OTLP_ENDPOINT, so the OTLP exporter must be a runtime dependency.
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    assert OTLPSpanExporter is not None
