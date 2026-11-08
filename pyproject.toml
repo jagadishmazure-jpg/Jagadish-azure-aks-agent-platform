@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
   "agent-framework-core==1.23.0",
-  "agent-framework-openai==1.17.0",
+  "agent-framework-openai==1.18.0",
   "fastapi==0.162.0",
   "uvicorn==0.54.0",
   "httpx==0.28.1",
