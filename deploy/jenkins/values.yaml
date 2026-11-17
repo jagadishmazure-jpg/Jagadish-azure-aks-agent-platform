@@ -109,6 +109,7 @@ agent:
           metadata:
             labels:
               azure.workload.identity/use: "true"
+              jenkins.io/release: "true"
           spec:
             serviceAccountName: jenkins-release
         containers:
@@ -129,6 +130,9 @@ agent:
           - name: dind
             image: docker:27.4.1-dind
             privileged: true
+            # Loopback only. Containers in this pod share the network namespace,
+            # so the deploy container can use it. Other pods cannot.
+            args: "--host=tcp://127.0.0.1:2375"
             envVars:
               - envVar:
                   key: DOCKER_TLS_CERTDIR
@@ -140,17 +144,7 @@ agent:
 
 persistence:
   enabled: true
-  # The controller also mounts the CSI volume so secret rotation keeps the
-  # files current. The secret itself is created by the jenkins-keyvault-sync
-  # pod in the jenkins-aks chart before this release is installed.
-  volumes:
-    - name: secrets-store
-      csi:
-        driver: secrets-store.csi.k8s.io
-        readOnly: true
-        volumeAttributes:
-          secretProviderClass: jenkins-keyvault
-  mounts:
-    - name: secrets-store
-      mountPath: /mnt/secrets-store
-      readOnly: true
+  # The controller does not mount the CSI volume. The jenkins-keyvault-sync pod
+  # (workload identity) materializes secret jenkins-keyvault, and this chart
+  # projects that Kubernetes secret. The controller pod therefore does not
+  # carry a cloud token.

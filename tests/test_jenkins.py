@@ -17,6 +17,8 @@ STAGES = (
     "Pytest",
     "Eval gate",
     "Release",
+    "Approve release",
+    "Ship",
     "Docker build",
     "Push to ACR",
     "Helm upgrade to AKS",
@@ -42,13 +44,17 @@ def test_jenkinsfile_is_declarative_and_stages_are_ordered():
 
 
 def test_deploy_stages_are_behind_the_flag():
-    flag = JENKINSFILE.find("return params.DEPLOY_TO_AKS")
-    assert flag != -1
+    release = _slice(JENKINSFILE, "stage('Release')", "stage('Approve release')")
+    gate = _slice(JENKINSFILE, "stage('Eval gate')", "stage('Release')")
+    assert "beforeAgent true" in release
+    assert "return params.DEPLOY_TO_AKS" in release
+    assert "BRANCH_NAME == 'main'" in release
+    assert "DEPLOY_TO_AKS" not in gate
     assert "defaultValue: false" in JENKINSFILE
-    for name in ("Lint", "Pytest", "Eval gate"):
-        assert JENKINSFILE.find(f"stage('{name}')") < flag
-    for name in ("Docker build", "Push to ACR", "Helm upgrade to AKS"):
-        assert JENKINSFILE.find(f"stage('{name}')") > flag
+    approve = _slice(JENKINSFILE, "stage('Approve release')", "stage('Ship')")
+    assert "input message:" in approve
+    ship = _slice(JENKINSFILE, "stage('Ship')", "stage('Docker build')")
+    assert "label 'release'" in ship
 
 
 def test_lint_pytest_and_eval_gate_call_the_ci_commands():
@@ -73,10 +79,22 @@ def test_release_stages_build_push_and_upgrade_without_a_password():
     assert "az acr login --name" in push and "docker push" in push
     assert "az login --service-principal" in push
     assert "--federated-token" in push
+    assert 'token=$(cat "$AZURE_FEDERATED_TOKEN_FILE")' in push
+    assert "set +x" in push
+    for line in JENKINSFILE.splitlines():
+        if "federated-token" in line:
+            assert "cat" not in line and "$token" in line
     assert "kubelogin convert-kubeconfig -l workloadidentity" in upgrade
     assert "helm upgrade --install claims-agent" in upgrade
+    assert "--values /tmp/claims-release.yaml" in upgrade
+    assert "--wait --timeout 5m" in upgrade
+    assert "--set" not in upgrade
+    assert "--create-namespace" not in upgrade
+    assert "env: prod" in upgrade
+    assert "azurefile-csi" in upgrade
     assert "--password" not in JENKINSFILE
     assert "client_secret" not in JENKINSFILE.lower()
+    assert "set -o pipefail" not in JENKINSFILE
 
 
 def test_pod_templates_split_ci_from_the_release_identity():
@@ -91,7 +109,10 @@ def test_pod_templates_split_ci_from_the_release_identity():
     privileged = [c["name"] for c in release_tpl[0]["containers"] if c.get("privileged")]
     assert privileged == ["dind"]
     assert "azure.workload.identity/use" in release_tpl[0]["yaml"]
+    assert "jenkins.io/release" in release_tpl[0]["yaml"]
     assert "azure.workload.identity/use" not in python_tpl[0]["yaml"]
+    dind = next(c for c in release_tpl[0]["containers"] if c["name"] == "dind")
+    assert dind["args"] == "--host=tcp://127.0.0.1:2375"
 
 
 def test_jenkins_values_use_the_key_vault_secret_and_no_admin_password():
@@ -107,8 +128,7 @@ def test_jenkins_values_use_the_key_vault_secret_and_no_admin_password():
     assert JENKINS_VALUES["serviceAccountAgent"]["name"] == "jenkins-release"
     assert JENKINS_VALUES["controller"]["JCasC"]["defaultConfig"] is True
     assert JENKINS_VALUES["controller"]["numExecutors"] == 0
-    mounts = JENKINS_VALUES["persistence"]["volumes"]
-    assert mounts[0]["csi"]["volumeAttributes"]["secretProviderClass"] == "jenkins-keyvault"
+    assert "volumes" not in JENKINS_VALUES["persistence"]
     blob = yaml.safe_dump(JENKINS_VALUES)
     assert "sk-" not in blob
     assert not re.search(r"password:\s*\S", blob)
@@ -125,18 +145,35 @@ def test_jenkins_aks_values_hold_names_only():
     }
 
 
+def _sa_blocks() -> dict[str, str]:
+    text = (ROOT / "deploy/helm/jenkins-aks/templates/serviceaccount.yaml").read_text()
+    blocks = {}
+    for chunk in text.split("---"):
+        match = re.search(r"^  name: (\S+)\s*$", chunk, re.M)
+        if match:
+            blocks[match.group(1)] = chunk
+    return blocks
+
+
 def test_jenkins_aks_templates_wire_identity_and_key_vault():
-    sa = (ROOT / "deploy/helm/jenkins-aks/templates/serviceaccount.yaml").read_text()
+    blocks = _sa_blocks()
+    assert "workloadIdentity.clientId" in blocks["jenkins"]
+    assert "azure.workload.identity/client-id" in blocks["jenkins"]
+    assert "workloadIdentity.agentClientId" in blocks["jenkins-release"]
+    assert "azure.workload.identity/client-id" in blocks["jenkins-release"]
+    assert "client-id" not in blocks["jenkins-ci"]
+    assert "automountServiceAccountToken: false" in blocks["jenkins-ci"]
     spc = (ROOT / "deploy/helm/jenkins-aks/templates/secretproviderclass.yaml").read_text()
     sync = (ROOT / "deploy/helm/jenkins-aks/templates/secret-sync.yaml").read_text()
-    assert "name: jenkins-ci" in sa and "automountServiceAccountToken: false" in sa
-    assert "azure.workload.identity/client-id" in sa
+    policy = (ROOT / "deploy/helm/jenkins-aks/templates/networkpolicy.yaml").read_text()
     assert 'usePodIdentity: "false"' in spc
     assert "secretName: jenkins-keyvault" in spc
     assert "objectType: secret" in spc
     assert "secretProviderClass: jenkins-keyvault" in sync
     assert 'azure.workload.identity/use: "true"' in sync
     assert "runAsNonRoot: true" in sync
+    assert 'jenkins.io/release: "true"' in policy
+    assert "ingress: []" in policy
     rendered = "\n".join(p.read_text() for p in (ROOT / "deploy/helm/jenkins-aks").rglob("*.yaml"))
     assert "sk-" not in rendered
     assert not re.search(r"(?i)password:\s*['\"][^'\"]+['\"]", rendered)
@@ -150,6 +187,10 @@ def test_terraform_jenkins_identity_has_no_secret_resource():
     assert "AcrPush" in TF
     assert "Azure Kubernetes Service Cluster User Role" in TF
     assert "Azure Kubernetes Service RBAC Writer" in TF
+    assert "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims" in TF
+    assert "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-user" in TF
+    assert "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-password" in TF
+    assert "var.jenkins_secret_scopes" in TF
     assert 'resource "azurerm_key_vault_secret"' not in TF
 
 

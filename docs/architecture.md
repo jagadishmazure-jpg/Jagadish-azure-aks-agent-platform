@@ -35,6 +35,7 @@ The manifests in this repository are:
 - `deploy/helm/jenkins-aks` — Jenkins service accounts, the Key Vault `SecretProviderClass`, and the secret-sync pod
 - `deploy/jenkins/values.yaml` — values for the upstream Jenkins chart, including the Kubernetes plugin pod templates
 - `deploy/argocd/application.yaml` — the Argo CD application
+- `deploy/k8s/claims-namespace.yaml` — the claims namespace a cluster admin applies before a Jenkins release
 - `deploy/kind/kind-config.yaml` — the local kind cluster
 - `deploy/observability/otel-collector.yaml` — the collector
 

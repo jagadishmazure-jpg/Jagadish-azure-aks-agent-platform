@@ -48,10 +48,11 @@ jobs:
           helm lint /tmp/jenkins --namespace jenkins -f deploy/jenkins/values.yaml
           helm template j /tmp/jenkins --namespace jenkins -f deploy/jenkins/values.yaml > /tmp/jenkins-render.yaml
           grep -q 'numExecutors: 0' /tmp/jenkins-render.yaml
-          grep -q 'secretProviderClass: jenkins-keyvault' /tmp/jenkins-render.yaml
+          grep -q 'name: jenkins-keyvault' /tmp/jenkins-render.yaml
           grep -q 'label: python' /tmp/jenkins-render.yaml
           grep -q 'label: release' /tmp/jenkins-render.yaml
           grep -q 'serviceAccount: jenkins-release' /tmp/jenkins-render.yaml
+          grep -q -- '--host=tcp://127.0.0.1:2375' /tmp/jenkins-render.yaml
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10

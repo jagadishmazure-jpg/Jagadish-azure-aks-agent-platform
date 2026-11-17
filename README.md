@@ -158,7 +158,7 @@ GitHub Actions is the pipeline that runs on every pull request. The Jenkinsfile 
 - Rollback time is a simulation of the canary settings, not a measured cluster rollback.
 - Cost uses estimated tokens (chars/4) and assumed list prices.
 - Pods "killed" in the measurement are in-process service objects; the kind smoke test is where a real pod is deleted.
-- The Jenkins controller, the Key Vault sync, the dind sidecar, the ACR push and the helm upgrade have not been run. They need a live AKS cluster, and the release pod's dind container is privileged. Lint and test pods are not.
+- The Jenkins controller, the Key Vault sync, the dind sidecar, the ACR push and the helm upgrade have not been run. They need a live AKS cluster. The release pod's dind container is privileged and listens on `127.0.0.1` only. Lint and test pods are not privileged. Jenkins helm upgrade and the Argo CD application are alternatives for the claims namespace.
 
 ## Docs
 

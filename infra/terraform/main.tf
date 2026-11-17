@@ -157,8 +157,18 @@ resource "azurerm_role_assignment" "claims_kv" {
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
 }
 
-resource "azurerm_role_assignment" "jenkins_kv" {
-  scope                = azurerm_key_vault.kv.id
+# Secret scope, not the whole vault. These assignments apply only after an operator
+# has created the two secrets (var.jenkins_secret_scopes). There is no vault-wide grant.
+resource "azurerm_role_assignment" "jenkins_kv_user" {
+  count                = var.jenkins_secret_scopes ? 1 : 0
+  scope                = "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-user"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.jenkins_controller.principal_id
+}
+
+resource "azurerm_role_assignment" "jenkins_kv_password" {
+  count                = var.jenkins_secret_scopes ? 1 : 0
+  scope                = "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-password"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.jenkins_controller.principal_id
 }
@@ -176,7 +186,9 @@ resource "azurerm_role_assignment" "jenkins_aks_user" {
 }
 
 resource "azurerm_role_assignment" "jenkins_aks_writer" {
-  scope                = azurerm_kubernetes_cluster.aks.id
+  # Namespace scope. Cluster User (above) is what az aks get-credentials needs.
+  # Creating the claims namespace is a cluster-admin step, not this identity.
+  scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims"
   role_definition_name = "Azure Kubernetes Service RBAC Writer"
   principal_id         = azurerm_user_assigned_identity.jenkins_agent.principal_id
 }
