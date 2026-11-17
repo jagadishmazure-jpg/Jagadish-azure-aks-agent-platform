@@ -43,7 +43,7 @@ jobs:
           ACR_NAME: ${{ vars.ACR_NAME }}
           AKS_NAME: ${{ vars.AKS_NAME }}
           AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
-          CLAIMS_IDENTITY_CLIENT_ID: ${{ vars.CLAIMS_IDENTITY_CLIENT_ID }}
+          CLAIMS_IDENTITY_CLIENT_ID: ${{ inputs.environment == 'prod' && vars.CLAIMS_IDENTITY_CLIENT_ID || vars.CLAIMS_DEV_IDENTITY_CLIENT_ID }}
         run: |
           set -eu
           case "$DEPLOY_ENVIRONMENT" in
@@ -114,6 +114,8 @@ jobs:
             docker push "$dest"
           fi
           cosign sign --yes "${ACR_NAME}.azurecr.io/claims-agent@${src_digest}"
+          # Standard SKU tag lock. Stops a later push from replacing this SHA tag.
+          az acr repository update --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --write-enabled false
           printf '%s\n' "$src_digest" > /tmp/image-digest
       - name: Resolve the existing ACR digest
         if: ${{ !inputs.push_image }}
@@ -146,7 +148,7 @@ jobs:
         env:
           ACR_NAME: ${{ vars.ACR_NAME }}
           NAMESPACE: ${{ inputs.namespace }}
-          CLAIMS_IDENTITY_CLIENT_ID: ${{ vars.CLAIMS_IDENTITY_CLIENT_ID }}
+          CLAIMS_IDENTITY_CLIENT_ID: ${{ inputs.environment == 'prod' && vars.CLAIMS_IDENTITY_CLIENT_ID || vars.CLAIMS_DEV_IDENTITY_CLIENT_ID }}
         run: |
           set -eu
           digest=$(cat /tmp/image-digest)

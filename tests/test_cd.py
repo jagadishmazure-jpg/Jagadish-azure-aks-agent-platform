@@ -108,6 +108,9 @@ def test_deploy_uses_oidc_and_a_values_file():
     assert "HELM_DRIVER=configmap" in DEPLOY
     assert "cosign verify" in DEPLOY
     assert "cosign sign --yes" in DEPLOY
+    assert 'az acr repository update --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --write-enabled false' in DEPLOY
+    assert "CLAIMS_DEV_IDENTITY_CLIENT_ID" in DEPLOY
+    assert "inputs.environment == 'prod' && vars.CLAIMS_IDENTITY_CLIENT_ID || vars.CLAIMS_DEV_IDENTITY_CLIENT_ID" in DEPLOY
     assert "rollout did not become Healthy" in DEPLOY
     assert "status.phase" in DEPLOY
     assert "azurefile-csi" in DEPLOY
@@ -141,6 +144,10 @@ def test_github_oidc_identity_is_least_privilege():
     assert "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims-dev" in TF
     assert '${azurerm_kubernetes_cluster.aks.id}/namespaces/claims"' in TF
     assert "azurerm_key_vault_secret" not in TF
+    assert 'resource "azurerm_user_assigned_identity" "claims_dev"' in TF
+    assert "system:serviceaccount:claims-dev:claims-agent" in TF
+    assert "system:serviceaccount:claims:claims-agent" in TF
+    assert "Premium SKU" in TF and "write-enabled false" in TF
 
 
 def test_cd_gate_waits_for_ci_and_rejects_failures(tmp_path: Path):
