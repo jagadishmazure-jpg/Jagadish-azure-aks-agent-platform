@@ -108,7 +108,8 @@ def test_deploy_uses_oidc_and_a_values_file():
     assert "HELM_DRIVER=configmap" in DEPLOY
     assert "cosign verify" in DEPLOY
     assert "cosign sign --yes" in DEPLOY
-    assert "rollout.argoproj.io" in DEPLOY
+    assert "rollout did not become Healthy" in DEPLOY
+    assert "status.phase" in DEPLOY
     assert "azurefile-csi" in DEPLOY
     assert "creds:" not in DEPLOY
     assert "client_secret" not in DEPLOY.lower()

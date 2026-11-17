@@ -61,7 +61,8 @@ def main(argv: list[str]) -> int:
         print("usage: cd_gate.py checks|deployment-ids|statuses-ok FILE", file=sys.stderr)
         return 2
     command, path = argv[1], argv[2]
-    payload = json.loads(open(path, encoding="utf-8").read())
+    with open(path, encoding="utf-8") as handle:
+        payload = json.loads(handle.read())
     if command == "checks":
         print(decide(payload))
         return 0
