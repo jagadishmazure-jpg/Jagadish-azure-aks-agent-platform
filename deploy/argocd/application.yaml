@@ -1,4 +1,7 @@
-# Argo CD pulls the chart from this repo and keeps the cluster in sync (GitOps). Not applied by CI.
+# Optional GitOps alternative to .github/workflows/cd.yml. Not applied by CI.
+# There is no automated sync: GitHub Actions is the default deployer, and an
+# auto-sync here would put this git revision back over a helm upgrade.
+# Apply this only after the CD workflow is disabled.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -17,5 +20,4 @@ spec:
         - { name: env, value: prod }
   destination: { server: https://kubernetes.default.svc, namespace: claims }
   syncPolicy:
-    automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

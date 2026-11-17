@@ -1,6 +1,7 @@
 image:
   repository: nfclaimsacr.azurecr.io/claims-agent   # kind: claims-agent (loaded locally)
   tag: "0.1.0"
+  digest: ""            # when set, the pod uses repository@digest and ignores tag
   pullPolicy: IfNotPresent
 replicas: 3
 # Azure: workload identity client id of the user-assigned identity (from Terraform output). Empty on kind.

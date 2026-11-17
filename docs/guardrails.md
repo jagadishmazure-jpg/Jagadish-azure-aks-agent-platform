@@ -11,7 +11,7 @@
 | Token and dollar cap per claim | `cost.TokenBudget` | `test_budget_escalates` |
 | Request schema: extra fields, NaN, size limits | `app.ClaimIn` | `test_schema_rejects` |
 | No keys in pods; key auth off on Azure services | Terraform, Helm | `test_terraform_hardening`, `test_values_hold_no_secret` |
-| Jenkins admin password in Key Vault; ACR push via workload identity, not a registry password | `deploy/helm/jenkins-aks`, `deploy/jenkins/values.yaml`, Terraform | `test_jenkins_values_use_the_key_vault_secret_and_no_admin_password`, `test_terraform_jenkins_identity_has_no_secret_resource` |
+| GitHub Actions deploy uses OIDC, not a client secret; ACR push and namespace-scoped AKS write | `.github/workflows/azure-deploy.yml`, Terraform | `test_deploy_uses_oidc_and_a_values_file`, `test_github_oidc_identity_is_least_privilege` |
 | Container hardening | Helm template | `test_pod_hardening` |
 | Supply chain: pinned actions, Trivy, cosign keyless, gitleaks, CodeQL | workflows | `test_actions_pinned_to_sha`, `test_cosign_keyless` |
 | Model key never committed | `.gitignore`, `.env.example`, gitleaks | `test_env_example_has_empty_secrets`, `test_ci_has_no_model_key` |

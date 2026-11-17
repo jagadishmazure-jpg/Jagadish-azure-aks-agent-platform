@@ -1,0 +1,3 @@
+# ADR 0006: GitHub Actions deploys to AKS
+
+Status: accepted. Supersedes ADR 0005. The default deploy path is GitHub Actions: OIDC to a user-assigned identity, an immutable SHA tag in ACR, then helm upgrade of the claims chart. Prod is the same tag promoted through a GitHub Environment that has required reviewers. Argo CD is an optional manual alternative. Its application does not auto-sync, so it does not put a git revision back over a GitHub Actions release. Apply that application only after the CD workflow is disabled. The deploy workflow succeeds without an Azure subscription when its repository variables are unset.

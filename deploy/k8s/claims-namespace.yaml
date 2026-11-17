@@ -1,5 +1,12 @@
-# Applied by a cluster admin before the Jenkins release identity runs helm.
-# That identity is Azure RBAC Writer on this namespace only, so it cannot create it.
+# Applied by a cluster admin before GitHub Actions helm-upgrades.
+# Dev writes only claims-dev. Prod writes only claims. Neither identity can create a namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claims-dev
+  labels:
+    app.kubernetes.io/name: claims-agent
+---
 apiVersion: v1
 kind: Namespace
 metadata:

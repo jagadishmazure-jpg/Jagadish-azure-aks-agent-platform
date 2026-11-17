@@ -22,10 +22,10 @@ variable "pg_admin_login" {
   type    = string
   default = "nfadmin"
 }
-variable "jenkins_secret_scopes" {
-  type        = bool
-  default     = false
-  description = "Grant the Jenkins controller Key Vault Secrets User on jenkins-admin-user and jenkins-admin-password only. Set true after those secrets exist. There is no vault-wide grant for Jenkins."
+variable "github_repository" {
+  type        = string
+  default     = "jagadishmazure-jpg/Jagadish-azure-aks-agent-platform"
+  description = "GitHub repository allowed to deploy through OIDC. Subjects are environment:dev and environment:prod."
 }
 
 variable "tags" {

@@ -11,33 +11,14 @@ Gated steps once approved:
 4. Set Helm values `workloadIdentity.clientId`, `model.endpoint` from Terraform outputs; `MODEL_PROVIDER=azure`.
 5. Point Front Door at the AKS ingress; configure the Entra ID app roles.
 
-## Jenkins on AKS (not run)
+## GitHub Actions deploy (not run against a subscription)
 
-The Jenkinsfile and `deploy/helm/jenkins-aks` have been linted and templated offline. Running them needs the cluster from the steps above, plus an operator creating two Key Vault secrets whose **names** are `jenkins-admin-user` and `jenkins-admin-password`. The values are typed into Key Vault. They are not in git, Terraform, or the Helm values. After they exist, set `jenkins_secret_scopes = true` and apply again so the controller identity can read those two secrets and no others.
+CI does not log in to Azure. `cd.yml` starts after `container.yml` succeeds on `main`, then deploys only if the CI checks for that commit succeeded. It prints `Azure CD skipped` and finishes successfully when the Azure variables for that environment are unset.
 
-Jenkins helm upgrade and the Argo CD application are alternatives. If Argo is auto-syncing `deploy/helm/claims-agent`, it will put the git revision back after Jenkins upgrades the release. Install one of them for the `claims` namespace.
+Dev and prod are separate. Dev uses identity `gha_dev`, namespace `claims-dev`, and may push to ACR. Prod uses identity `gha_prod`, namespace `claims`, and may only pull from ACR. A dev run cannot change the prod namespace. Both GitHub Environments should be limited to the `main` branch, and `prod` needs required reviewers before the first promotion. The workflow also rejects a ref that is not `main`.
 
-What a live cluster has to provide before the deploy stages can succeed:
+The image deployed is the one `container.yml` built, scanned, and signed in GHCR. CD verifies that signature, copies the digest into ACR, and will not replace an existing SHA tag with different bytes. Prod promotes that digest only after the dev GitHub deployment for the SHA succeeded. Helm uses `HELM_DRIVER=configmap` because the namespace Writer role does not read Secrets, and it waits for an Argo Rollout to become Healthy when that resource exists. `APP_ENV` is left at `dev`. Setting it to `prod` makes the service reject every token, including a real Entra token, until signature checks exist in the service.
 
-- AKS from this Terraform (OIDC issuer, workload identity, Key Vault CSI, Azure RBAC, local accounts off).
-- The two Key Vault secrets above, then `jenkins_secret_scopes = true`.
-- A cluster admin applies `deploy/k8s/claims-namespace.yaml`. The release identity is Azure RBAC Writer on that namespace only, so it cannot create the namespace and it cannot change other namespaces.
-- The release pod template's `dind` container is privileged and listens on `127.0.0.1` only. A NetworkPolicy on `jenkins.io/release=true` allows no ingress. Azure Policy on the cluster has to allow the privileged container in the `jenkins` namespace, or the docker build stage cannot start. Lint and pytest pods are not privileged.
-- Outbound network from the release pod to ACR, Entra ID, the Kubernetes API, and the Helm and Docker download URLs.
-- `DEPLOY_TO_AKS` on `main` (not on a pull request), then the `Approve release` input. The checkbox alone does not allocate the release pod (`beforeAgent`).
+`deploy/argocd/application.yaml` has no automated sync. Apply it only after disabling `.github/workflows/cd.yml`. If Argo already created the chart resources, set repository variable `HELM_ADOPT_EXISTING` to `true` for one run so `deploy/k8s/adopt-for-helm.sh` adds Helm ownership, then unset it.
 
-```bash
-helm upgrade --install jenkins-aks deploy/helm/jenkins-aks \
-  --namespace jenkins --create-namespace \
-  --set workloadIdentity.clientId="$(terraform output -raw jenkins_controller_identity_client_id)" \
-  --set workloadIdentity.agentClientId="$(terraform output -raw jenkins_agent_identity_client_id)" \
-  --set keyVault.name="$(terraform output -raw key_vault_name)" \
-  --set keyVault.tenantId="<entra tenant id>"
-
-# Wait until secret jenkins-keyvault exists, then:
-helm repo add jenkins https://charts.jenkins.io
-helm upgrade --install jenkins jenkins/jenkins \
-  --namespace jenkins --version 5.13.3 -f deploy/jenkins/values.yaml
-```
-
-Point a Pipeline-from-SCM job at this repo's `Jenkinsfile`. Leave `DEPLOY_TO_AKS` false to run lint, pytest and the eval gate. On `main`, set it true and set `CLAIMS_IDENTITY_CLIENT_ID` from `terraform output -raw claims_identity_client_id`. The job then waits for `Approve release` before it builds, pushes to ACR, and helm-upgrades. The image tag includes the git commit. Chart values are written to a file (`env: prod`, `checkpoints.storageClass: azurefile-csi`) so a comma in a parameter cannot add another Helm assignment. ACR admin stays disabled. The release pod logs in with the federated token with shell tracing off. `AZURE_OPENAI_ENDPOINT`, when set, must be an `https://` host. The service still uses the labelled stub until Azure OpenAI can be called without an API key; this pipeline does not inject one.
+`.github/workflows/azure-deploy.yml` is the reusable workflow other repositories can call.
