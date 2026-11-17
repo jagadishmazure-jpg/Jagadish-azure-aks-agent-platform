@@ -6,6 +6,11 @@ COPY src ./src
 RUN pip install --no-cache-dir --prefix=/install .
 
 FROM python:3.12-slim
+# The slim tag can lag a Debian security update. Upgrade the packages Trivy
+# gates on (zlib) before dropping root.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --create-home app
 COPY --from=build /install /usr/local
 USER 10001

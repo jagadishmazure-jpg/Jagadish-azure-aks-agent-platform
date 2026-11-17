@@ -104,6 +104,40 @@ resource "azurerm_federated_identity_credential" "claims" {
   subject             = "system:serviceaccount:claims:claims-agent"
 }
 
+# Jenkins controller reads Key Vault. Release agents push to ACR and helm-upgrade AKS.
+# The CI service account (jenkins-ci) has no identity. Subjects match deploy/helm/jenkins-aks.
+resource "azurerm_user_assigned_identity" "jenkins_controller" {
+  name                = "${var.prefix}-jenkins-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "jenkins_agent" {
+  name                = "${var.prefix}-jenkins-agent-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "jenkins_controller" {
+  name                = "jenkins-controller"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.jenkins_controller.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:jenkins:jenkins"
+}
+
+resource "azurerm_federated_identity_credential" "jenkins_agent" {
+  name                = "jenkins-agent"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.jenkins_agent.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:jenkins:jenkins-release"
+}
+
 # ---------- secrets
 resource "azurerm_key_vault" "kv" {
   name                       = "${var.prefix}-kv"
@@ -121,6 +155,42 @@ resource "azurerm_role_assignment" "claims_kv" {
   scope                = azurerm_key_vault.kv.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
+}
+
+# Secret scope, not the whole vault. These assignments apply only after an operator
+# has created the two secrets (var.jenkins_secret_scopes). There is no vault-wide grant.
+resource "azurerm_role_assignment" "jenkins_kv_user" {
+  count                = var.jenkins_secret_scopes ? 1 : 0
+  scope                = "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-user"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.jenkins_controller.principal_id
+}
+
+resource "azurerm_role_assignment" "jenkins_kv_password" {
+  count                = var.jenkins_secret_scopes ? 1 : 0
+  scope                = "${azurerm_key_vault.kv.id}/secrets/jenkins-admin-password"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.jenkins_controller.principal_id
+}
+
+resource "azurerm_role_assignment" "jenkins_acr_push" {
+  scope                = azurerm_container_registry.acr.id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.jenkins_agent.principal_id
+}
+
+resource "azurerm_role_assignment" "jenkins_aks_user" {
+  scope                = azurerm_kubernetes_cluster.aks.id
+  role_definition_name = "Azure Kubernetes Service Cluster User Role"
+  principal_id         = azurerm_user_assigned_identity.jenkins_agent.principal_id
+}
+
+resource "azurerm_role_assignment" "jenkins_aks_writer" {
+  # Namespace scope. Cluster User (above) is what az aks get-credentials needs.
+  # Creating the claims namespace is a cluster-admin step, not this identity.
+  scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims"
+  role_definition_name = "Azure Kubernetes Service RBAC Writer"
+  principal_id         = azurerm_user_assigned_identity.jenkins_agent.principal_id
 }
 
 # ---------- messaging: one broker (Service Bus) instead of a queue plus a separate log platform

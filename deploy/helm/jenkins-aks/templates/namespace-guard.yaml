@@ -1,0 +1,3 @@
+{{- if ne .Release.Namespace "jenkins" }}
+{{- fail "Install jenkins-aks in namespace jenkins so the federated credential subjects match." }}
+{{- end }}

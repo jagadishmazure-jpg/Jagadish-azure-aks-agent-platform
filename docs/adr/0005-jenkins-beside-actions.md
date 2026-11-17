@@ -1,0 +1,3 @@
+# ADR 0005: Jenkins beside GitHub Actions
+
+Status: accepted. GitHub Actions stays the pipeline that runs on every pull request. The Jenkinsfile is the same lint, pytest and eval gate, plus docker build, ACR push and helm upgrade, for a team that already runs Jenkins on AKS. Those three deploy stages stay off unless someone sets DEPLOY_TO_AKS on a live cluster. ACR has no admin user. The controller password comes from Key Vault through the CSI driver. Release pods use a federated identity (AcrPush, cluster user, AKS RBAC writer). The lint and test pods use a service account with no Azure role. This has been helm-templated and structure-tested. It has not been applied.

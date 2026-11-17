@@ -1,0 +1,8 @@
+# Applied by a cluster admin before the Jenkins release identity runs helm.
+# That identity is Azure RBAC Writer on this namespace only, so it cannot create it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claims
+  labels:
+    app.kubernetes.io/name: claims-agent
