@@ -9,3 +9,4 @@
 7. **Provision.** Review the Terraform, fill tfvars, add a backend, plan, get approval, apply.
 8. **GitOps.** Point Argo CD at your fork; keep the canary analysis query on a metric you trust.
 9. **Evaluate.** Register a Foundry evaluation on recorded, redacted triage outputs before raising the auto-pay limit.
+10. **Jenkins, if you already run it.** Install `deploy/helm/jenkins-aks` and the Jenkins chart with `deploy/jenkins/values.yaml` (see [deploy.md](deploy.md)). The lint, pytest and eval-gate stages match GitHub Actions. Leave `DEPLOY_TO_AKS` false until the cluster, the Key Vault secrets and the privileged dind exception are in place.

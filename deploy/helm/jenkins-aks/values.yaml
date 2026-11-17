@@ -1,0 +1,15 @@
+# Empty on purpose. Set at install time from Terraform outputs. None of these are secret material.
+#   --set workloadIdentity.clientId=$(terraform output -raw jenkins_controller_identity_client_id)
+#   --set workloadIdentity.agentClientId=$(terraform output -raw jenkins_agent_identity_client_id)
+#   --set keyVault.name=$(terraform output -raw key_vault_name)
+#   --set keyVault.tenantId=<entra tenant id>
+workloadIdentity:
+  clientId: ""
+  agentClientId: ""
+keyVault:
+  name: ""
+  tenantId: ""
+# Key Vault secret names the operator creates. The values stay in Key Vault.
+secretNames:
+  adminUser: jenkins-admin-user
+  adminPassword: jenkins-admin-password

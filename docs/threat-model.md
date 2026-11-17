@@ -8,6 +8,7 @@
 | Information disclosure | phone numbers in logs or errors | redaction filter on logs and exceptions, OTel collector strips body attributes |
 | Denial of service | huge text, token burn | request size limits, per-claim token and dollar caps, HPA, budget alert |
 | Elevation of privilege | pod reads other secrets | workload identity scoped to one Key Vault role; NetworkPolicy default deny |
+| Elevation of privilege | Jenkins release pod runs privileged dind | that pod template is used only when `DEPLOY_TO_AKS` is set; lint and test pods have no Azure role and are not privileged; the admin password is a Key Vault secret name, not a value in git |
 | LLM01 prompt injection | indirect instructions inside the claim | screen + data-only framing + strict schema + human gate |
 | LLM02 sensitive info disclosure | model echoes PII | redaction happens before the prompt |
 | LLM05 improper output handling | model returns prose or NaN | strict parse, fail-safe to human |

@@ -39,6 +39,19 @@ jobs:
         with: { version: v3.16.2 }
       - run: helm lint deploy/helm/claims-agent
       - run: helm template t deploy/helm/claims-agent > /dev/null && helm template t deploy/helm/claims-agent --api-versions argoproj.io/v1alpha1 > /dev/null
+      - name: Jenkins on AKS chart
+        run: helm lint deploy/helm/jenkins-aks --namespace jenkins && helm template j deploy/helm/jenkins-aks --namespace jenkins > /dev/null
+      - name: Jenkins chart values (upstream chart, no cluster)
+        run: |
+          helm repo add jenkins https://charts.jenkins.io
+          helm pull jenkins/jenkins --version 5.13.3 --untar --untardir /tmp
+          helm lint /tmp/jenkins --namespace jenkins -f deploy/jenkins/values.yaml
+          helm template j /tmp/jenkins --namespace jenkins -f deploy/jenkins/values.yaml > /tmp/jenkins-render.yaml
+          grep -q 'numExecutors: 0' /tmp/jenkins-render.yaml
+          grep -q 'secretProviderClass: jenkins-keyvault' /tmp/jenkins-render.yaml
+          grep -q 'label: python' /tmp/jenkins-render.yaml
+          grep -q 'label: release' /tmp/jenkins-render.yaml
+          grep -q 'serviceAccount: jenkins-release' /tmp/jenkins-render.yaml
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10

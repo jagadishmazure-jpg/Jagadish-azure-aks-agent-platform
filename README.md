@@ -11,7 +11,7 @@
 <!-- numbers:start -->
 | Measure (simulated / synthetic, stub model) | Result |
 | --- | --- |
-| Automated tests | **152** |
+| Automated tests | **162** |
 | Synthetic claims run end to end | 300 (auto_paid 107, denied_by_adjuster 48, denied_no_coverage 15, paid_after_review 130) |
 | Paused for a human adjuster | 178 of 300 |
 | Trace continuity after pod kill, shared checkpoints | 100% (178 of 178 finished on another pod) |
@@ -121,11 +121,35 @@ Entra ID at the edge plus claim checks in the service, dev tokens refused when `
 | Measurements (pod kill, injection, rollback sim, cost) | **Built, simulated / synthetic** |
 | Dockerfile, Helm chart, Argo CD app, Rollouts canary + analysis | **Written**; Helm lint/template in CI; image + kind smoke run in CI |
 | GitHub Actions: tests, Trivy, cosign keyless sign, kind smoke | **Written, runs in CI** |
-| Terraform: AKS, ACR, Key Vault, workload identity, Service Bus, Postgres + pgvector, Azure OpenAI, Foundry, Front Door WAF, Monitor, budget | **Written, `terraform validate` only, never applied** |
+| Jenkinsfile (lint, pytest, eval gate, docker build, ACR push, helm upgrade) and Jenkins-on-AKS chart | **Written, structure tests and helm lint/template; not run on a cluster** |
+| Terraform: AKS, ACR, Key Vault, workload identity, Service Bus, Postgres + pgvector, Azure OpenAI, Foundry, Front Door WAF, Monitor, budget, Jenkins identities | **Written, `terraform validate` only, never applied** |
 | Grafana dashboard JSON, OTel collector config | **Written, not run** |
 | Postgres checkpoint store (today: shared volume) | Planned |
 | APIM in front of AKS (Front Door chosen for now) | Planned |
 | Bicep parity, Foundry eval pipeline run, live AKS deploy | Planned (live deploy needs owner's yes and costs money) |
+
+## CI parity: GitHub Actions and Jenkins
+
+GitHub Actions is the pipeline that runs on every pull request. The Jenkinsfile (`Jenkinsfile`, Kubernetes pod templates in `deploy/jenkins/values.yaml`, controller config in `deploy/helm/jenkins-aks`) repeats those offline gates and adds a deploy path that stays off unless `DEPLOY_TO_AKS` is true. That flag needs a live AKS cluster. The Jenkins stages are structure-tested and helm-templated; a controller has not run them.
+
+| Step | GitHub Actions | Jenkinsfile |
+| --- | --- | --- |
+| Ruff lint and format | `ci.yml` | stage Lint, container `python` |
+| Brand check | `ci.yml` | stage Lint |
+| Helm lint and template | `ci.yml` helm job (`claims-agent` and `jenkins-aks`) | stage Lint, container `helm` |
+| Jenkins chart values against `jenkins/jenkins` 5.13.3 | `ci.yml` helm job | chart install is manual; see [docs/deploy.md](docs/deploy.md) |
+| Terraform fmt and validate | `infra.yml` | stage Lint, container `terraform` |
+| pytest | `ci.yml` | stage Pytest |
+| Test count | `scripts/count_tests.py` | stage Pytest |
+| Eval regression gate | `scripts/run_measurements.py --check` | stage Eval gate. A fresh stub run must match `results/metrics.json` or the stage fails |
+| README numbers | `scripts/render_docs.py --check` | stage Eval gate |
+| gitleaks, full history | `ci.yml` secrets job | not in the Jenkinsfile |
+| CodeQL | `codeql.yml` | not in the Jenkinsfile |
+| Docker build | `container.yml`, every pull request | stage Docker build, only when `DEPLOY_TO_AKS` is true (dind sidecar) |
+| Trivy HIGH/CRITICAL | `container.yml` | not in the Jenkinsfile |
+| kind smoke (deploy, kill a pod, resume) | `container.yml` | not in the Jenkinsfile |
+| Push the image | GHCR on `main`, cosign keyless | stage Push to ACR. Workload identity, role `AcrPush`, no registry password. Only when `DEPLOY_TO_AKS` is true |
+| Deploy | Argo CD, not applied by CI | stage Helm upgrade to AKS. `kubelogin` with workload identity. Only when `DEPLOY_TO_AKS` is true |
 
 ## Limitations
 
@@ -134,6 +158,7 @@ Entra ID at the edge plus claim checks in the service, dev tokens refused when `
 - Rollback time is a simulation of the canary settings, not a measured cluster rollback.
 - Cost uses estimated tokens (chars/4) and assumed list prices.
 - Pods "killed" in the measurement are in-process service objects; the kind smoke test is where a real pod is deleted.
+- The Jenkins controller, the Key Vault sync, the dind sidecar, the ACR push and the helm upgrade have not been run. They need a live AKS cluster, and the release pod's dind container is privileged. Lint and test pods are not.
 
 ## Docs
 
