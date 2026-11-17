@@ -103,7 +103,8 @@ def test_github_oidc_identity_is_least_privilege():
     assert 'resource "azurerm_user_assigned_identity" "gha_deploy"' in TF
     assert "repo:${var.github_repository}:environment:dev" in TF
     assert "repo:${var.github_repository}:environment:prod" in TF
-    assert "https://token.actions.githubusercontent.com" in TF
+    issuers = [line.split("=", 1)[1].strip().strip('"') for line in TF.splitlines() if line.strip().startswith("issuer") and '"' in line]
+    assert issuers == ["https://token.actions.githubusercontent.com", "https://token.actions.githubusercontent.com"]
     assert "AcrPush" in TF
     assert "Azure Kubernetes Service Cluster User Role" in TF
     assert "Azure Kubernetes Service RBAC Writer" in TF
