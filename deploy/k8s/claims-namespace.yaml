@@ -1,5 +1,5 @@
-# Applied by a cluster admin before the Jenkins release identity runs helm.
-# That identity is Azure RBAC Writer on this namespace only, so it cannot create it.
+# Applied by a cluster admin before GitHub Actions helm-upgrades the claims chart.
+# The deploy identity is Azure RBAC Writer on this namespace only, so it cannot create it.
 apiVersion: v1
 kind: Namespace
 metadata:

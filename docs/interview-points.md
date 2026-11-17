@@ -7,5 +7,5 @@
 - Why the model only scores: payout math stays in code, so a successful injection cannot set an amount.
 - Cost control at three levels: per-claim cap, dashboard cost panel, resource-group budget.
 - Release safety chain: Trivy, cosign keyless (identity of the workflow, not a stored key), canary with automatic abort.
-- Kubernetes manifests and Helm charts are in this repo (`deploy/helm/claims-agent`, `deploy/helm/jenkins-aks`, Argo CD, kind, the collector). Jenkins is a declarative pipeline next to GitHub Actions. ACR push and helm upgrade stay off unless `DEPLOY_TO_AKS` is set on a live cluster. The release identity can push images and apply charts; the lint and test identity cannot.
+- Kubernetes manifests and Helm charts are in this repo (`deploy/helm/claims-agent`, the claims namespace, Argo CD as a manual option, kind, the collector). GitHub Actions is the deploy path: OIDC, an immutable SHA in ACR, helm upgrade. Prod reuses that SHA and waits for required reviewers. The deploy identity can push images and change only the claims namespace.
 - Honesty: what is simulated (rollback, cost) and what is real (workflow, guards, resume), and why the live run did not happen.

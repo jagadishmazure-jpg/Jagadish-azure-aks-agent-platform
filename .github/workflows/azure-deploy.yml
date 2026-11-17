@@ -1,0 +1,116 @@
+# Reusable Azure deploy. Other repositories can call this workflow with
+# workflow_call. The caller must grant id-token: write. Authentication is
+# GitHub OIDC to the user-assigned identity in Terraform (no client secret).
+# Kubelogin is installed with Azure/use-kubelogin (the published setup action;
+# a repository named azure/setup-kubelogin is not published).
+name: azure-deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment, dev or prod
+        required: true
+        type: string
+      image_sha:
+        description: Immutable image tag (40-character git SHA)
+        required: true
+        type: string
+      push_image:
+        description: Build and push the tag. False promotes a tag already in ACR.
+        required: true
+        type: boolean
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check the deploy inputs
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          AKS_NAME: ${{ vars.AKS_NAME }}
+          AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
+          CLAIMS_IDENTITY_CLIENT_ID: ${{ vars.CLAIMS_IDENTITY_CLIENT_ID }}
+        run: |
+          set -eu
+          case "$DEPLOY_ENVIRONMENT" in
+            dev|prod) ;;
+            *) echo "environment must be dev or prod" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$IMAGE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s\n' "$ACR_NAME" | grep -Eq '^[a-z0-9]{5,50}$'
+          printf '%s\n' "$AKS_NAME" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+          printf '%s\n' "$AKS_RESOURCE_GROUP" | grep -Eq '^[A-Za-z0-9._()-]{1,90}$'
+          if [ -n "${CLAIMS_IDENTITY_CLIENT_ID:-}" ]; then
+            printf '%s\n' "$CLAIMS_IDENTITY_CLIENT_ID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          fi
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build the image
+        if: inputs.push_image
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+        run: docker build -t "${ACR_NAME}.azurecr.io/claims-agent:${IMAGE_SHA}" .
+      - name: Trivy image scan
+        if: inputs.push_image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ vars.ACR_NAME }}.azurecr.io/claims-agent:${{ inputs.image_sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Push the immutable tag to ACR
+        if: inputs.push_image
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+        run: |
+          set -eu
+          az acr login --name "$ACR_NAME"
+          docker push "${ACR_NAME}.azurecr.io/claims-agent:${IMAGE_SHA}"
+      - name: Confirm the tag is already in ACR
+        if: ${{ !inputs.push_image }}
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+        run: |
+          set -eu
+          az acr repository show --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" >/dev/null
+      - uses: Azure/use-kubelogin@0ce7c36141aa27d4934872cf00b0120804c98a29 # v1.3
+      - uses: azure/aks-set-context@883bdc8d8d1d0fd87e66cc4ba6f0b618f9eb5281 # v5.0.1
+        with:
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_NAME }}
+          admin: "false"
+          use-kubelogin: "true"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.16.2 }
+      - name: Helm upgrade claims-agent
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          CLAIMS_IDENTITY_CLIENT_ID: ${{ vars.CLAIMS_IDENTITY_CLIENT_ID }}
+        run: |
+          set -eu
+          {
+            printf 'image:\n  repository: %s.azurecr.io/claims-agent\n  tag: "%s"\n  pullPolicy: IfNotPresent\n' "$ACR_NAME" "$IMAGE_SHA"
+            printf 'env: prod\n'
+            printf 'checkpoints:\n  storageClass: azurefile-csi\n'
+            if [ -n "${CLAIMS_IDENTITY_CLIENT_ID:-}" ]; then
+              printf 'workloadIdentity:\n  clientId: "%s"\n' "$CLAIMS_IDENTITY_CLIENT_ID"
+            fi
+          } > /tmp/claims-release.yaml
+          helm upgrade --install claims-agent deploy/helm/claims-agent \
+            --namespace claims \
+            --values /tmp/claims-release.yaml \
+            --wait --timeout 5m

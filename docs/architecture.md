@@ -13,7 +13,7 @@
 | Secrets | Key Vault, CSI secret store driver, federated credential | none needed |
 | Messaging | Service Bus queue `claims-intake` with dead-lettering | in-process |
 | State | Postgres flexible server, Entra auth only, `pgvector` allowed | shared checkpoint volume |
-| Delivery | GitHub Actions -> GHCR/ACR -> Argo CD -> Argo Rollouts canary. Jenkinsfile: same lint, pytest and eval gate, then a gated ACR push and helm upgrade | GitHub Actions + kind smoke. Jenkinsfile structure test and helm lint/template |
+| Delivery | GitHub Actions CI, then CD: OIDC, ACR tag = git SHA, helm upgrade. Prod promotes that SHA through a protected environment. Argo CD is manual and optional | GitHub Actions CI + kind smoke. CD skips when Azure variables are unset |
 | Observability | OpenTelemetry -> Azure Monitor / Log Analytics, managed Prometheus, Grafana | in-memory span exporter, `/metrics` |
 | Cost | budget alert on the resource group, per-claim token and dollar caps | per-claim caps |
 
@@ -25,17 +25,15 @@ The common production-stack picture is a good start. These are the five changes 
 2. **Secrets.** Pods get an Azure identity through a federated credential, not a key (`azurerm_federated_identity_credential`, Helm `workloadIdentity.clientId`). Azure OpenAI, Service Bus and Postgres have key or password auth turned off in Terraform.
 3. **Duplicates removed.** One broker (Service Bus) instead of a job queue plus a separate event-log platform, and one database (Postgres with pgvector) instead of Postgres plus a separate search cluster. A dedicated search service is added only if search quality needs it. A test fails if either duplicate comes back.
 4. **An AI layer.** Model deployment and a Foundry project for evaluations, plus guards in the request path: injection screen, PII redaction, strict output schema, token and dollar caps, human approval for risky payouts.
-5. **Release safety.** Trivy gate, cosign keyless signing, kind smoke test with a pod kill, Argo CD self-heal, Argo Rollouts canary with automatic abort on a failing error-rate analysis.
+5. **Release safety.** Trivy gate, cosign keyless signing, kind smoke test with a pod kill, GitHub Actions deploy of an immutable image, Argo Rollouts canary with automatic abort on a failing error-rate analysis. Argo CD does not auto-sync.
 
 ## Kubernetes manifests
 
 The manifests in this repository are:
 
 - `deploy/helm/claims-agent` — the claims service (Deployment or Rollout, Service, HPA, PDB, NetworkPolicy, ServiceAccount)
-- `deploy/helm/jenkins-aks` — Jenkins service accounts, the Key Vault `SecretProviderClass`, and the secret-sync pod
-- `deploy/jenkins/values.yaml` — values for the upstream Jenkins chart, including the Kubernetes plugin pod templates
-- `deploy/argocd/application.yaml` — the Argo CD application
-- `deploy/k8s/claims-namespace.yaml` — the claims namespace a cluster admin applies before a Jenkins release
+- `deploy/argocd/application.yaml` — optional manual Argo CD application, without automated sync
+- `deploy/k8s/claims-namespace.yaml` — the claims namespace a cluster admin applies before the GitHub Actions deploy
 - `deploy/kind/kind-config.yaml` — the local kind cluster
 - `deploy/observability/otel-collector.yaml` — the collector
 

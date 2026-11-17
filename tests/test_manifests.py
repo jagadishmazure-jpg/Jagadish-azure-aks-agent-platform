@@ -16,7 +16,7 @@ VALUES = yaml.safe_load((ROOT / "deploy" / "helm" / "claims-agent" / "values.yam
 def test_actions_pinned_to_sha(wf):
     for line in wf.read_text().splitlines():
         m = re.search(r"uses:\s*([^\s#]+)", line)
-        if m:
+        if m and not m.group(1).startswith("./"):
             assert re.search(r"@[0-9a-f]{40}$", m.group(1)), line
 
 
@@ -25,9 +25,9 @@ def test_workflows_parse_and_have_permissions(wf):
     assert "permissions" in yaml.safe_load(wf.read_text())
 
 
-def test_no_apply_or_plan_in_ci():
+def test_no_apply_or_plan_in_workflows():
     text = "\n".join(w.read_text() for w in WF)
-    assert "terraform apply" not in text and "terraform plan" not in text and "azure/login" not in text
+    assert "terraform apply" not in text and "terraform plan" not in text
 
 
 def test_ci_has_no_model_key():
@@ -108,7 +108,8 @@ def test_canary_matches_simulation_params():
 
 def test_argocd_points_at_chart():
     app = yaml.safe_load((ROOT / "deploy/argocd/application.yaml").read_text())
-    assert app["spec"]["source"]["path"] == "deploy/helm/claims-agent" and app["spec"]["syncPolicy"]["automated"]["selfHeal"]
+    assert app["spec"]["source"]["path"] == "deploy/helm/claims-agent"
+    assert "automated" not in app["spec"].get("syncPolicy", {})
 
 
 def test_dashboard_queries_real_metrics():

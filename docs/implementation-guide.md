@@ -7,6 +7,6 @@
 5. **Move checkpoints to a shared store.** Replace `FileCheckpointStorage` with a Postgres-backed storage before running more than one replica on AKS without RWX volumes.
 6. **Run kind.** `./deploy/kind/smoke.sh` proves deploy, pod kill and resume.
 7. **Provision.** Review the Terraform, fill tfvars, add a backend, plan, get approval, apply.
-8. **GitOps.** Point Argo CD at your fork; keep the canary analysis query on a metric you trust.
+8. **Deploy.** Follow [deploy.md](deploy.md). GitHub Actions is the default. Create the `dev` and `prod` environments first, with required reviewers on `prod`, then set the repository variables. A push to `main` deploys dev. `workflow_dispatch` with `environment=prod` and the dev image SHA promotes that same tag.
 9. **Evaluate.** Register a Foundry evaluation on recorded, redacted triage outputs before raising the auto-pay limit.
-10. **Jenkins, if you already run it.** Install `deploy/helm/jenkins-aks` and the Jenkins chart with `deploy/jenkins/values.yaml` (see [deploy.md](deploy.md)). The lint, pytest and eval-gate stages match GitHub Actions. Leave `DEPLOY_TO_AKS` false until the cluster, the Key Vault secrets and the privileged dind exception are in place.
+10. **Argo CD, only if you turn GitHub Actions deploy off.** The application in `deploy/argocd/application.yaml` does not auto-sync. Apply it after disabling `.github/workflows/cd.yml`, and keep the canary analysis query on a metric you trust.

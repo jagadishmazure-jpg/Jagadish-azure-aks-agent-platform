@@ -1,0 +1,105 @@
+# Deploy to AKS. Push to main deploys the dev environment and pushes an immutable
+# SHA tag to ACR. workflow_dispatch with environment=prod reuses that tag and
+# does not build again. Required reviewers on the prod environment are set in
+# the GitHub UI (see docs/deploy.md). When the Azure repository variables are
+# unset this workflow prints why and succeeds, so a repo with no subscription
+# stays green.
+name: cd
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment
+        type: choice
+        default: dev
+        options: [dev, prod]
+      image_sha:
+        description: 40-character git SHA already in ACR. Required for prod. Dev builds the current commit when this is empty.
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: azure-cd-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: none
+    outputs:
+      ready: ${{ steps.g.outputs.ready }}
+      environment: ${{ steps.g.outputs.environment }}
+      image_sha: ${{ steps.g.outputs.image_sha }}
+      push_image: ${{ steps.g.outputs.push_image }}
+    steps:
+      - id: g
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          AKS_NAME: ${{ vars.AKS_NAME }}
+          AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          INPUT_SHA: ${{ github.event.inputs.image_sha }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          missing=""
+          [ -n "${AZURE_CLIENT_ID:-}" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "${AZURE_TENANT_ID:-}" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "${ACR_NAME:-}" ] || missing="$missing ACR_NAME"
+          [ -n "${AKS_NAME:-}" ] || missing="$missing AKS_NAME"
+          [ -n "${AKS_RESOURCE_GROUP:-}" ] || missing="$missing AKS_RESOURCE_GROUP"
+          if [ -n "$missing" ]; then
+            echo "Azure CD skipped. Repository variables are unset:$missing"
+            echo "CI does not need them. One-time setup is in docs/deploy.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            environment="$INPUT_ENVIRONMENT"
+          else
+            environment="dev"
+          fi
+          case "$environment" in
+            dev|prod) ;;
+            *) echo "environment must be dev or prod" >&2; exit 1 ;;
+          esac
+          if [ "$environment" = "prod" ]; then
+            if [ -z "${INPUT_SHA:-}" ]; then
+              echo "prod promotes an image already in ACR. Pass image_sha (the dev deploy's git SHA)." >&2
+              exit 1
+            fi
+            image_sha="$INPUT_SHA"
+            push_image=false
+          elif [ -n "${INPUT_SHA:-}" ]; then
+            image_sha="$INPUT_SHA"
+            push_image=false
+          else
+            image_sha="$COMMIT_SHA"
+            push_image=true
+          fi
+          printf '%s\n' "$image_sha" | grep -Eq '^[0-9a-f]{40}$'
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "image_sha=$image_sha" >> "$GITHUB_OUTPUT"
+          echo "push_image=$push_image" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/azure-deploy.yml
+    with:
+      environment: ${{ needs.gate.outputs.environment }}
+      image_sha: ${{ needs.gate.outputs.image_sha }}
+      push_image: ${{ needs.gate.outputs.push_image == 'true' }}
