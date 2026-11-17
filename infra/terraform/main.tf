@@ -109,6 +109,8 @@ resource "azurerm_federated_identity_credential" "claims" {
 }
 
 # Separate from the prod claims identity so a claims-dev pod cannot present the prod token.
+# No data-plane roles: the shared Key Vault, Service Bus queue, and Azure OpenAI
+# account stay on the prod claims identity. This stack has one copy of each.
 resource "azurerm_user_assigned_identity" "claims_dev" {
   name                = "${var.prefix}-claims-dev-id"
   location            = azurerm_resource_group.rg.location
@@ -178,12 +180,6 @@ resource "azurerm_role_assignment" "claims_kv" {
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
 }
 
-resource "azurerm_role_assignment" "claims_dev_kv" {
-  scope                = azurerm_key_vault.kv.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.claims_dev.principal_id
-}
-
 resource "azurerm_role_assignment" "gha_dev_acr_push" {
   scope                = azurerm_container_registry.acr.id
   role_definition_name = "AcrPush"
@@ -245,12 +241,6 @@ resource "azurerm_role_assignment" "claims_sb" {
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
 }
 
-resource "azurerm_role_assignment" "claims_dev_sb" {
-  scope                = azurerm_servicebus_namespace.sb.id
-  role_definition_name = "Azure Service Bus Data Owner"
-  principal_id         = azurerm_user_assigned_identity.claims_dev.principal_id
-}
-
 # ---------- data: Postgres with pgvector (one store for state, checkpoints and vectors)
 resource "azurerm_postgresql_flexible_server" "pg" {
   name                          = "${var.prefix}-pg"
@@ -307,12 +297,6 @@ resource "azurerm_role_assignment" "claims_aoai" {
   scope                = azurerm_cognitive_account.aoai.id
   role_definition_name = "Cognitive Services OpenAI User"
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
-}
-
-resource "azurerm_role_assignment" "claims_dev_aoai" {
-  scope                = azurerm_cognitive_account.aoai.id
-  role_definition_name = "Cognitive Services OpenAI User"
-  principal_id         = azurerm_user_assigned_identity.claims_dev.principal_id
 }
 
 resource "azurerm_storage_account" "foundry" {
