@@ -1,8 +1,8 @@
 # Reusable Azure deploy. Other repositories can call this workflow with
-# workflow_call. The caller must grant id-token: write. Authentication is
-# GitHub OIDC to the user-assigned identity in Terraform (no client secret).
-# Kubelogin is installed with Azure/use-kubelogin (the published setup action;
-# a repository named azure/setup-kubelogin is not published).
+# workflow_call. The caller must grant id-token: write, packages: read, and
+# deployments: read. Authentication is GitHub OIDC (no client secret).
+# Kubelogin is Azure/use-kubelogin. A repository named azure/setup-kubelogin
+# is not published.
 name: azure-deploy
 on:
   workflow_call:
@@ -12,16 +12,22 @@ on:
         required: true
         type: string
       image_sha:
-        description: Immutable image tag (40-character git SHA)
+        description: Git SHA of the image CI built and signed
         required: true
         type: string
       push_image:
-        description: Build and push the tag. False promotes a tag already in ACR.
+        description: Copy the CI image into ACR. False promotes the existing digest.
         required: true
         type: boolean
+      namespace:
+        description: claims-dev or claims
+        required: true
+        type: string
 permissions:
   contents: read
   id-token: write
+  packages: read
+  deployments: read
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -33,6 +39,7 @@ jobs:
         env:
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_SHA: ${{ inputs.image_sha }}
+          NAMESPACE: ${{ inputs.namespace }}
           ACR_NAME: ${{ vars.ACR_NAME }}
           AKS_NAME: ${{ vars.AKS_NAME }}
           AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
@@ -40,7 +47,8 @@ jobs:
         run: |
           set -eu
           case "$DEPLOY_ENVIRONMENT" in
-            dev|prod) ;;
+            dev) [ "$NAMESPACE" = "claims-dev" ] || { echo "dev deploys to claims-dev" >&2; exit 1; } ;;
+            prod) [ "$NAMESPACE" = "claims" ] || { echo "prod deploys to claims" >&2; exit 1; } ;;
             *) echo "environment must be dev or prod" >&2; exit 1 ;;
           esac
           printf '%s\n' "$IMAGE_SHA" | grep -Eq '^[0-9a-f]{40}$'
@@ -50,42 +58,76 @@ jobs:
           if [ -n "${CLAIMS_IDENTITY_CLIENT_ID:-}" ]; then
             printf '%s\n' "$CLAIMS_IDENTITY_CLIENT_ID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
           fi
-      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build the image
-        if: inputs.push_image
+      - name: Require a successful dev deployment before prod
+        if: inputs.environment == 'prod'
         env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
-          IMAGE_SHA: ${{ inputs.image_sha }}
-        run: docker build -t "${ACR_NAME}.azurecr.io/claims-agent:${IMAGE_SHA}" .
-      - name: Trivy image scan
-        if: inputs.push_image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ vars.ACR_NAME }}.azurecr.io/claims-agent:${{ inputs.image_sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-      - name: Push the immutable tag to ACR
-        if: inputs.push_image
-        env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
           IMAGE_SHA: ${{ inputs.image_sha }}
         run: |
           set -eu
+          gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=dev&sha=${IMAGE_SHA}&per_page=20" > /tmp/deps.json
+          found=0
+          for id in $(python3 scripts/cd_gate.py deployment-ids /tmp/deps.json); do
+            gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" > /tmp/statuses.json
+            if python3 scripts/cd_gate.py statuses-ok /tmp/statuses.json; then
+              found=1
+              break
+            fi
+          done
+          if [ "$found" != 1 ]; then
+            echo "No successful dev deployment for ${IMAGE_SHA}. Not promoting." >&2
+            exit 1
+          fi
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ inputs.environment == 'prod' && vars.AZURE_CLIENT_ID_PROD || vars.AZURE_CLIENT_ID_DEV }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Copy the signed CI image into ACR
+        if: inputs.push_image
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          repo=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          src="ghcr.io/${repo}/claims-agent:${IMAGE_SHA}"
+          dest="${ACR_NAME}.azurecr.io/claims-agent:${IMAGE_SHA}"
+          set +x
+          printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          set -x
+          docker pull "$src"
+          cosign verify "$src" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          src_digest=$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$src" | grep '@sha256:' | head -n 1 | cut -d@ -f2)
+          test -n "$src_digest"
           az acr login --name "$ACR_NAME"
-          docker push "${ACR_NAME}.azurecr.io/claims-agent:${IMAGE_SHA}"
-      - name: Confirm the tag is already in ACR
+          existing=$(az acr repository show --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --query digest -o tsv 2>/dev/null || true)
+          if [ -n "$existing" ] && [ "$existing" != "$src_digest" ]; then
+            echo "Refusing to overwrite ${dest}; it already points at ${existing}." >&2
+            exit 1
+          fi
+          if [ -z "$existing" ]; then
+            docker tag "$src" "$dest"
+            docker push "$dest"
+          fi
+          cosign sign --yes "${ACR_NAME}.azurecr.io/claims-agent@${src_digest}"
+          printf '%s\n' "$src_digest" > /tmp/image-digest
+      - name: Resolve the existing ACR digest
         if: ${{ !inputs.push_image }}
         env:
           ACR_NAME: ${{ vars.ACR_NAME }}
           IMAGE_SHA: ${{ inputs.image_sha }}
         run: |
           set -eu
-          az acr repository show --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" >/dev/null
+          digest=$(az acr repository show --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --query digest -o tsv)
+          printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          cosign verify "${ACR_NAME}.azurecr.io/claims-agent@${digest}" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          printf '%s\n' "$digest" > /tmp/image-digest
       - uses: Azure/use-kubelogin@0ce7c36141aa27d4934872cf00b0120804c98a29 # v1.3
       - uses: azure/aks-set-context@883bdc8d8d1d0fd87e66cc4ba6f0b618f9eb5281 # v5.0.1
         with:
@@ -95,22 +137,48 @@ jobs:
           use-kubelogin: "true"
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with: { version: v3.16.2 }
+      - name: Adopt resources left by a previous Argo sync
+        if: vars.HELM_ADOPT_EXISTING == 'true'
+        env:
+          NAMESPACE: ${{ inputs.namespace }}
+        run: sh deploy/k8s/adopt-for-helm.sh "$NAMESPACE"
       - name: Helm upgrade claims-agent
         env:
           ACR_NAME: ${{ vars.ACR_NAME }}
-          IMAGE_SHA: ${{ inputs.image_sha }}
+          NAMESPACE: ${{ inputs.namespace }}
           CLAIMS_IDENTITY_CLIENT_ID: ${{ vars.CLAIMS_IDENTITY_CLIENT_ID }}
         run: |
           set -eu
+          digest=$(cat /tmp/image-digest)
+          printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
           {
-            printf 'image:\n  repository: %s.azurecr.io/claims-agent\n  tag: "%s"\n  pullPolicy: IfNotPresent\n' "$ACR_NAME" "$IMAGE_SHA"
-            printf 'env: prod\n'
+            printf 'image:\n  repository: %s.azurecr.io/claims-agent\n  digest: "%s"\n  pullPolicy: IfNotPresent\n' "$ACR_NAME" "$digest"
             printf 'checkpoints:\n  storageClass: azurefile-csi\n'
             if [ -n "${CLAIMS_IDENTITY_CLIENT_ID:-}" ]; then
               printf 'workloadIdentity:\n  clientId: "%s"\n' "$CLAIMS_IDENTITY_CLIENT_ID"
             fi
           } > /tmp/claims-release.yaml
-          helm upgrade --install claims-agent deploy/helm/claims-agent \
-            --namespace claims \
+          # APP_ENV stays at the chart default (dev). APP_ENV=prod rejects every
+          # token because the service does not verify Entra signatures yet.
+          # ConfigMap release storage: the namespace Writer role does not read Secrets.
+          HELM_DRIVER=configmap helm upgrade --install claims-agent deploy/helm/claims-agent \
+            --namespace "$NAMESPACE" \
             --values /tmp/claims-release.yaml \
             --wait --timeout 5m
+          if kubectl get rollout.argoproj.io claims-agent -n "$NAMESPACE" >/dev/null 2>&1; then
+            i=0
+            while [ "$i" -lt 30 ]; do
+              phase=$(kubectl get rollout.argoproj.io claims-agent -n "$NAMESPACE" -o jsonpath='{.status.phase}')
+              if [ "$phase" = "Healthy" ]; then
+                exit 0
+              fi
+              if [ "$phase" = "Degraded" ]; then
+                echo "rollout degraded" >&2
+                exit 1
+              fi
+              i=$((i + 1))
+              sleep 10
+            done
+            echo "rollout did not become Healthy" >&2
+            exit 1
+          fi

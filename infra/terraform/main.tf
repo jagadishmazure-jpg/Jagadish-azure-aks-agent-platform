@@ -104,10 +104,17 @@ resource "azurerm_federated_identity_credential" "claims" {
   subject             = "system:serviceaccount:claims:claims-agent"
 }
 
-# GitHub Actions deploy identity. OIDC subjects are the dev and prod Environments.
-# No client secret. AcrPush, cluster get-credentials, and write only in the claims namespace.
-resource "azurerm_user_assigned_identity" "gha_deploy" {
-  name                = "${var.prefix}-gha-deploy"
+# Two deploy identities so a dev workflow token cannot change the prod namespace.
+# OIDC subjects are the GitHub Environments. No client secret.
+resource "azurerm_user_assigned_identity" "gha_dev" {
+  name                = "${var.prefix}-gha-dev"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "gha_prod" {
+  name                = "${var.prefix}-gha-prod"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = var.tags
@@ -116,7 +123,7 @@ resource "azurerm_user_assigned_identity" "gha_deploy" {
 resource "azurerm_federated_identity_credential" "gha_dev" {
   name                = "github-environment-dev"
   resource_group_name = azurerm_resource_group.rg.name
-  parent_id           = azurerm_user_assigned_identity.gha_deploy.id
+  parent_id           = azurerm_user_assigned_identity.gha_dev.id
   audience            = ["api://AzureADTokenExchange"]
   issuer              = "https://token.actions.githubusercontent.com"
   subject             = "repo:${var.github_repository}:environment:dev"
@@ -125,7 +132,7 @@ resource "azurerm_federated_identity_credential" "gha_dev" {
 resource "azurerm_federated_identity_credential" "gha_prod" {
   name                = "github-environment-prod"
   resource_group_name = azurerm_resource_group.rg.name
-  parent_id           = azurerm_user_assigned_identity.gha_deploy.id
+  parent_id           = azurerm_user_assigned_identity.gha_prod.id
   audience            = ["api://AzureADTokenExchange"]
   issuer              = "https://token.actions.githubusercontent.com"
   subject             = "repo:${var.github_repository}:environment:prod"
@@ -150,24 +157,42 @@ resource "azurerm_role_assignment" "claims_kv" {
   principal_id         = azurerm_user_assigned_identity.claims.principal_id
 }
 
-resource "azurerm_role_assignment" "gha_acr_push" {
+resource "azurerm_role_assignment" "gha_dev_acr_push" {
   scope                = azurerm_container_registry.acr.id
   role_definition_name = "AcrPush"
-  principal_id         = azurerm_user_assigned_identity.gha_deploy.principal_id
+  principal_id         = azurerm_user_assigned_identity.gha_dev.principal_id
 }
 
-resource "azurerm_role_assignment" "gha_aks_user" {
+resource "azurerm_role_assignment" "gha_prod_acr_pull" {
+  scope                = azurerm_container_registry.acr.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.gha_prod.principal_id
+}
+
+resource "azurerm_role_assignment" "gha_dev_aks_user" {
   scope                = azurerm_kubernetes_cluster.aks.id
   role_definition_name = "Azure Kubernetes Service Cluster User Role"
-  principal_id         = azurerm_user_assigned_identity.gha_deploy.principal_id
+  principal_id         = azurerm_user_assigned_identity.gha_dev.principal_id
 }
 
-resource "azurerm_role_assignment" "gha_aks_writer" {
-  # Namespace scope. Cluster User (above) is what az aks get-credentials needs.
-  # Creating the claims namespace is a cluster-admin step, not this identity.
+resource "azurerm_role_assignment" "gha_prod_aks_user" {
+  scope                = azurerm_kubernetes_cluster.aks.id
+  role_definition_name = "Azure Kubernetes Service Cluster User Role"
+  principal_id         = azurerm_user_assigned_identity.gha_prod.principal_id
+}
+
+resource "azurerm_role_assignment" "gha_dev_aks_writer" {
+  # Dev cannot write the prod namespace. Helm stores release state in ConfigMaps
+  # because this role does not read Secrets.
+  scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims-dev"
+  role_definition_name = "Azure Kubernetes Service RBAC Writer"
+  principal_id         = azurerm_user_assigned_identity.gha_dev.principal_id
+}
+
+resource "azurerm_role_assignment" "gha_prod_aks_writer" {
   scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims"
   role_definition_name = "Azure Kubernetes Service RBAC Writer"
-  principal_id         = azurerm_user_assigned_identity.gha_deploy.principal_id
+  principal_id         = azurerm_user_assigned_identity.gha_prod.principal_id
 }
 
 # ---------- messaging: one broker (Service Bus) instead of a queue plus a separate log platform

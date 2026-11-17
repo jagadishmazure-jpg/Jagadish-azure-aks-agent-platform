@@ -31,7 +31,7 @@ spec:
       terminationGracePeriodSeconds: 10
       containers:
         - name: app
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{- if .Values.image.digest -}}{{ .Values.image.repository }}@{{ .Values.image.digest }}{{- else -}}{{ .Values.image.repository }}:{{ .Values.image.tag }}{{- end -}}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports: [{ containerPort: 8080, name: http }]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }

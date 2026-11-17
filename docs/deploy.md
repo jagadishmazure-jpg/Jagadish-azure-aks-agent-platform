@@ -13,16 +13,12 @@ Gated steps once approved:
 
 ## GitHub Actions deploy (not run against a subscription)
 
-CI (lint, pytest, `scripts/run_measurements.py --check`, Terraform validate, image build, Trivy, kind, CodeQL, gitleaks) does not log in to Azure. `cd.yml` deploys. It finishes successfully and prints `Azure CD skipped` when `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `AKS_NAME`, or `AKS_RESOURCE_GROUP` is unset.
+CI does not log in to Azure. `cd.yml` starts after `container.yml` succeeds on `main`, then deploys only if the CI checks for that commit succeeded. It prints `Azure CD skipped` and finishes successfully when the Azure variables for that environment are unset.
 
-GitHub Actions is the default deployer for the `claims` namespace. `deploy/argocd/application.yaml` has no automated sync. Apply it only after disabling `.github/workflows/cd.yml`.
+Dev and prod are separate. Dev uses identity `gha_dev`, namespace `claims-dev`, and may push to ACR. Prod uses identity `gha_prod`, namespace `claims`, and may only pull from ACR. A dev run cannot change the prod namespace. Both GitHub Environments should be limited to the `main` branch, and `prod` needs required reviewers before the first promotion. The workflow also rejects a ref that is not `main`.
 
-One-time setup, after `terraform apply`:
+The image deployed is the one `container.yml` built, scanned, and signed in GHCR. CD verifies that signature, copies the digest into ACR, and will not replace an existing SHA tag with different bytes. Prod promotes that digest only after the dev GitHub deployment for the SHA succeeded. Helm uses `HELM_DRIVER=configmap` because the namespace Writer role does not read Secrets, and it waits for an Argo Rollout to become Healthy when that resource exists. `APP_ENV` is left at `dev`. Setting it to `prod` makes the service reject every token, including a real Entra token, until signature checks exist in the service.
 
-1. Create GitHub Environments `dev` (no required reviewers) and `prod` (required reviewers) before the first prod run.
-2. Set the repository variables in the table in the README. `AZURE_CLIENT_ID` is `terraform output -raw gha_deploy_client_id`. There is no client secret.
-3. A cluster admin applies `deploy/k8s/claims-namespace.yaml`.
-
-A push to `main` builds and pushes `claims-agent:<sha>` to ACR, then helm-upgrades namespace `claims` in the `dev` environment. **Actions → cd → Run workflow** with environment `prod` and that same `image_sha` promotes the tag. Prod does not build. The chart values file sets `env: prod` and `checkpoints.storageClass: azurefile-csi`. Helm waits until the workloads are ready. The service stays on the labelled stub until Azure OpenAI can be called without an API key. This workflow does not inject one.
+`deploy/argocd/application.yaml` has no automated sync. Apply it only after disabling `.github/workflows/cd.yml`. If Argo already created the chart resources, set repository variable `HELM_ADOPT_EXISTING` to `true` for one run so `deploy/k8s/adopt-for-helm.sh` adds Helm ownership, then unset it.
 
 `.github/workflows/azure-deploy.yml` is the reusable workflow other repositories can call.

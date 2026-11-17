@@ -33,7 +33,7 @@ The manifests in this repository are:
 
 - `deploy/helm/claims-agent` — the claims service (Deployment or Rollout, Service, HPA, PDB, NetworkPolicy, ServiceAccount)
 - `deploy/argocd/application.yaml` — optional manual Argo CD application, without automated sync
-- `deploy/k8s/claims-namespace.yaml` — the claims namespace a cluster admin applies before the GitHub Actions deploy
+- `deploy/k8s/claims-namespace.yaml` — `claims-dev` and `claims`, applied by a cluster admin before the GitHub Actions deploy
 - `deploy/kind/kind-config.yaml` — the local kind cluster
 - `deploy/observability/otel-collector.yaml` — the collector
 

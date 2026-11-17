@@ -1,12 +1,14 @@
-# Deploy to AKS. Push to main deploys the dev environment and pushes an immutable
-# SHA tag to ACR. workflow_dispatch with environment=prod reuses that tag and
-# does not build again. Required reviewers on the prod environment are set in
-# the GitHub UI (see docs/deploy.md). When the Azure repository variables are
-# unset this workflow prints why and succeeds, so a repo with no subscription
-# stays green.
+# Deploy to AKS after CI on main succeeds. workflow_dispatch promotes a SHA that
+# already has a successful dev deployment. Prod and dev use different namespaces
+# and different identities. Required reviewers on prod are set in the GitHub UI
+# (see docs/deploy.md), and both environments should allow only the main branch.
+# When the Azure repository variables are unset this workflow prints why and
+# succeeds, so a repo with no subscription stays green.
 name: cd
 on:
-  push:
+  workflow_run:
+    workflows: [container]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -16,29 +18,33 @@ on:
         default: dev
         options: [dev, prod]
       image_sha:
-        description: 40-character git SHA already in ACR. Required for prod. Dev builds the current commit when this is empty.
+        description: 40-character git SHA already signed and pushed by CI. Required for prod.
         type: string
         required: false
 permissions:
   contents: read
 concurrency:
-  group: azure-cd-${{ github.event.inputs.environment || 'dev' }}
+  group: azure-cd-claims-agent
   cancel-in-progress: false
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     permissions:
-      contents: none
+      contents: read
+      checks: read
     outputs:
       ready: ${{ steps.g.outputs.ready }}
       environment: ${{ steps.g.outputs.environment }}
       image_sha: ${{ steps.g.outputs.image_sha }}
       push_image: ${{ steps.g.outputs.push_image }}
+      namespace: ${{ steps.g.outputs.namespace }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: g
         env:
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_ID_DEV: ${{ vars.AZURE_CLIENT_ID_DEV }}
+          AZURE_CLIENT_ID_PROD: ${{ vars.AZURE_CLIENT_ID_PROD }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           ACR_NAME: ${{ vars.ACR_NAME }}
@@ -48,18 +54,38 @@ jobs:
           INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
           INPUT_SHA: ${{ github.event.inputs.image_sha }}
           COMMIT_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -eu
+          client_var="AZURE_CLIENT_ID_DEV"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_ENVIRONMENT" = "prod" ]; then
+            client_var="AZURE_CLIENT_ID_PROD"
+          fi
           missing=""
-          [ -n "${AZURE_CLIENT_ID:-}" ] || missing="$missing AZURE_CLIENT_ID"
           [ -n "${AZURE_TENANT_ID:-}" ] || missing="$missing AZURE_TENANT_ID"
           [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
           [ -n "${ACR_NAME:-}" ] || missing="$missing ACR_NAME"
           [ -n "${AKS_NAME:-}" ] || missing="$missing AKS_NAME"
           [ -n "${AKS_RESOURCE_GROUP:-}" ] || missing="$missing AKS_RESOURCE_GROUP"
+          if [ "$client_var" = "AZURE_CLIENT_ID_PROD" ]; then
+            [ -n "${AZURE_CLIENT_ID_PROD:-}" ] || missing="$missing AZURE_CLIENT_ID_PROD"
+          else
+            [ -n "${AZURE_CLIENT_ID_DEV:-}" ] || missing="$missing AZURE_CLIENT_ID_DEV"
+          fi
           if [ -n "$missing" ]; then
             echo "Azure CD skipped. Repository variables are unset:$missing"
             echo "CI does not need them. One-time setup is in docs/deploy.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HEAD_BRANCH" != "main" ]; then
+            echo "CD only runs from main (got ${HEAD_BRANCH})." >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_run" ] && [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
+            echo "The container workflow did not succeed. Not deploying."
             echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -69,28 +95,54 @@ jobs:
             environment="dev"
           fi
           case "$environment" in
-            dev|prod) ;;
+            dev) namespace="claims-dev" ;;
+            prod) namespace="claims" ;;
             *) echo "environment must be dev or prod" >&2; exit 1 ;;
           esac
           if [ "$environment" = "prod" ]; then
             if [ -z "${INPUT_SHA:-}" ]; then
-              echo "prod promotes an image already in ACR. Pass image_sha (the dev deploy's git SHA)." >&2
+              echo "prod promotes an image already deployed to dev. Pass image_sha." >&2
               exit 1
             fi
             image_sha="$INPUT_SHA"
-            push_image=false
+            push_image="false"
           elif [ -n "${INPUT_SHA:-}" ]; then
             image_sha="$INPUT_SHA"
-            push_image=false
+            push_image="false"
           else
-            image_sha="$COMMIT_SHA"
-            push_image=true
+            image_sha="$HEAD_SHA"
+            push_image="true"
           fi
           printf '%s\n' "$image_sha" | grep -Eq '^[0-9a-f]{40}$'
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "environment=$environment" >> "$GITHUB_OUTPUT"
-          echo "image_sha=$image_sha" >> "$GITHUB_OUTPUT"
-          echo "push_image=$push_image" >> "$GITHUB_OUTPUT"
+          attempt=0
+          result="wait"
+          while [ "$attempt" -lt 45 ]; do
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" > /tmp/checks.json
+            result=$(python3 scripts/cd_gate.py checks /tmp/checks.json)
+            case "$result" in
+              ready) break ;;
+              fail)
+                echo "CI checks failed or were cancelled. Not deploying."
+                echo "ready=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              wait) sleep 20 ;;
+              *) echo "unexpected gate result: $result" >&2; exit 1 ;;
+            esac
+            attempt=$((attempt + 1))
+          done
+          if [ "$result" != "ready" ]; then
+            echo "CI checks did not finish in time. Not deploying."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "ready=true"
+            echo "environment=$environment"
+            echo "image_sha=$image_sha"
+            echo "push_image=$push_image"
+            echo "namespace=$namespace"
+          } >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: gate
@@ -98,8 +150,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: read
+      deployments: read
     uses: ./.github/workflows/azure-deploy.yml
     with:
       environment: ${{ needs.gate.outputs.environment }}
       image_sha: ${{ needs.gate.outputs.image_sha }}
       push_image: ${{ needs.gate.outputs.push_image == 'true' }}
+      namespace: ${{ needs.gate.outputs.namespace }}

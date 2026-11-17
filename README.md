@@ -11,7 +11,7 @@
 <!-- numbers:start -->
 | Measure (simulated / synthetic, stub model) | Result |
 | --- | --- |
-| Automated tests | **165** |
+| Automated tests | **166** |
 | Synthetic claims run end to end | 300 (auto_paid 107, denied_by_adjuster 48, denied_no_coverage 15, paid_after_review 130) |
 | Paused for a human adjuster | 178 of 300 |
 | Trace continuity after pod kill, shared checkpoints | 100% (178 of 178 finished on another pod) |
@@ -138,12 +138,12 @@ flowchart LR
   PR --> TF[infra.yml: terraform validate]
   PR --> IMG[container.yml: build, Trivy, kind]
   PR --> SEC[CodeQL and gitleaks]
-  MAIN[Push to main] --> DEV[cd.yml environment dev]
-  DEV --> PUSH[Build and push SHA to ACR]
-  PUSH --> HELM[helm upgrade namespace claims]
+  MAIN[container.yml succeeds on main] --> DEV[cd.yml environment dev]
+  DEV --> COPY[Copy the signed CI image into ACR by digest]
+  COPY --> HELMDEV[helm upgrade namespace claims-dev]
   DISP[workflow_dispatch prod + image_sha] --> PROD[cd.yml environment prod]
-  PROD --> SAME[helm upgrade the same SHA]
-  HELM --> AKS[AKS]
+  PROD --> SAME[helm upgrade that digest in namespace claims]
+  HELMDEV --> AKS[AKS]
   SAME --> AKS
 ```
 
@@ -151,32 +151,36 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 
 ### One-time setup
 
-1. Apply Terraform (`infra/terraform`) after review. It creates the user-assigned identity `gha_deploy` and federated credentials for `repo:<github_repository>:environment:dev` and `:environment:prod`. The identity has `AcrPush` on the registry, `Azure Kubernetes Service Cluster User Role` on the cluster, and `Azure Kubernetes Service RBAC Writer` on the `claims` namespace only.
-2. In the GitHub repo settings, create environment `dev` with no required reviewers, and environment `prod` with required reviewers. Do this before the first prod dispatch. A missing `prod` environment would not enforce review.
-3. Set repository variables (not secrets). The client id is an identifier. There is no client secret.
+1. Apply Terraform (`infra/terraform`) after review. It creates two user-assigned identities. `gha_dev` may push to ACR and write only the `claims-dev` namespace. `gha_prod` may pull from ACR and write only the `claims` namespace. Both can read cluster credentials. Neither gets a client secret.
+2. In the GitHub repo settings, create environment `dev` with no required reviewers, and environment `prod` with required reviewers. Limit both environments to the `main` branch. Do this before the first prod dispatch.
+3. Set repository variables (not secrets). The client ids are identifiers.
 
 | Variable | Value |
 | --- | --- |
-| `AZURE_CLIENT_ID` | `terraform output -raw gha_deploy_client_id` |
+| `AZURE_CLIENT_ID_DEV` | `terraform output -raw gha_dev_client_id` |
+| `AZURE_CLIENT_ID_PROD` | `terraform output -raw gha_prod_client_id` |
 | `AZURE_TENANT_ID` | the Entra tenant id |
 | `AZURE_SUBSCRIPTION_ID` | the subscription id |
 | `ACR_NAME` | `terraform output -raw acr_name` |
 | `AKS_NAME` | `terraform output -raw aks_name` |
 | `AKS_RESOURCE_GROUP` | `terraform output -raw resource_group_name` |
 | `CLAIMS_IDENTITY_CLIENT_ID` | optional, `terraform output -raw claims_identity_client_id` |
+| `HELM_ADOPT_EXISTING` | optional `true` only for the first install onto resources Argo CD already created |
 
-4. A cluster admin applies `deploy/k8s/claims-namespace.yaml`. The deploy identity cannot create that namespace.
+4. A cluster admin applies `deploy/k8s/claims-namespace.yaml`. The deploy identities cannot create namespaces.
 
 ### How to run
 
-- A pull request runs CI only.
-- A push to `main` builds `claims-agent:<git sha>`, scans it with Trivy, pushes that tag to ACR, and helm-upgrades the `claims` namespace through the `dev` environment. `APP_ENV` is `prod` (dev tokens are refused) and checkpoints use `azurefile-csi`.
-- Promote to prod with **Actions → cd → Run workflow**, environment `prod`, and `image_sha` set to the SHA already pushed. That run does not build. It checks the tag is in ACR and helm-upgrades the same tag. The `prod` environment's required reviewers must approve it.
-- If any of the six required variables is unset, `cd.yml` prints `Azure CD skipped` and finishes successfully.
+- A pull request runs CI only. `pytest -q` skips the actionlint test unless `actionlint` is on `PATH`. CI installs it.
+- After `container.yml` succeeds on `main`, `cd.yml` waits until the CI checks are green, verifies the cosign signature on the GHCR image that CI built, copies that digest into ACR, and refuses to overwrite the SHA tag with different bytes. It helm-upgrades namespace `claims-dev`. Helm stores release state in ConfigMaps. `APP_ENV` stays `dev`: the service rejects every token when `APP_ENV=prod`, because Entra signature checks are not implemented in the service yet.
+- Promote with **Actions → cd → Run workflow** on `main`, environment `prod`, and `image_sha` of a SHA whose dev deployment succeeded. Prod verifies the ACR digest and helm-upgrades namespace `claims`. It does not build. Required reviewers must approve. A dispatch from any other branch is rejected.
+- Dev and prod share one concurrency group, so the two helm upgrades cannot overlap.
+- If the variables for that environment are unset, `cd.yml` prints `Azure CD skipped` and finishes successfully.
+- If an earlier Argo sync already created the resources, set `HELM_ADOPT_EXISTING` to `true` once. That runs `deploy/k8s/adopt-for-helm.sh`. Then unset it.
 
-Another repository can call `.github/workflows/azure-deploy.yml` (`workflow_call`) with `environment`, `image_sha`, and `push_image`, and must grant `id-token: write`. Kubelogin is `Azure/use-kubelogin`.
+Another repository can call `.github/workflows/azure-deploy.yml` with `environment`, `image_sha`, `push_image`, and `namespace`, and must grant `id-token: write`. Kubelogin is `Azure/use-kubelogin`.
 
-Argo CD (`deploy/argocd/application.yaml`) is the optional GitOps path. It does not auto-sync. Use it only after disabling `cd.yml`. Both managing the `claims` namespace would fight.
+Argo CD (`deploy/argocd/application.yaml`) is the optional GitOps path. It does not auto-sync. Use it only after disabling `cd.yml`.
 
 ## Limitations
 
