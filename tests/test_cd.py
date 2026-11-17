@@ -108,6 +108,13 @@ def test_deploy_uses_oidc_and_a_values_file():
     assert "HELM_DRIVER=configmap" in DEPLOY
     assert "cosign verify" in DEPLOY
     assert "cosign sign --yes" in DEPLOY
+    assert 'az acr repository update --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --write-enabled false' in DEPLOY
+    assert "CLAIMS_DEV_IDENTITY_CLIENT_ID" in DEPLOY
+    assert "|| vars.CLAIMS_DEV_IDENTITY_CLIENT_ID" not in DEPLOY
+    assert "|| vars.AZURE_CLIENT_ID_DEV" not in DEPLOY
+    assert 'dev) CLIENT_ID="$CLAIMS_DEV_IDENTITY_CLIENT_ID"' in DEPLOY
+    assert 'prod) CLIENT_ID="$CLAIMS_IDENTITY_CLIENT_ID"' in DEPLOY
+    assert "workload identity client id is unset" in DEPLOY
     assert "rollout did not become Healthy" in DEPLOY
     assert "status.phase" in DEPLOY
     assert "azurefile-csi" in DEPLOY
@@ -141,6 +148,36 @@ def test_github_oidc_identity_is_least_privilege():
     assert "${azurerm_kubernetes_cluster.aks.id}/namespaces/claims-dev" in TF
     assert '${azurerm_kubernetes_cluster.aks.id}/namespaces/claims"' in TF
     assert "azurerm_key_vault_secret" not in TF
+    assert 'resource "azurerm_user_assigned_identity" "claims_dev"' in TF
+    assert "system:serviceaccount:claims-dev:claims-agent" in TF
+    assert "system:serviceaccount:claims:claims-agent" in TF
+    assert "Premium SKU" in TF and "write-enabled false" in TF
+    assert "claims_dev.principal_id" not in TF
+    dev_cred = _resource(TF, "azurerm_federated_identity_credential", "claims_dev")
+    prod_cred = _resource(TF, "azurerm_federated_identity_credential", "claims")
+    assert "azurerm_user_assigned_identity.claims_dev.id" in dev_cred
+    assert "system:serviceaccount:claims-dev:claims-agent" in dev_cred
+    assert "azurerm_user_assigned_identity.claims.id" in prod_cred
+    assert "azurerm_user_assigned_identity.claims_dev.id" not in prod_cred
+    assert "system:serviceaccount:claims:claims-agent" in prod_cred
+
+
+def _resource(text: str, type_name: str, name: str) -> str:
+    marker = f'resource "{type_name}" "{name}" {{'
+    start = text.index(marker) + len(marker)
+    end = text.index("\n}", start)
+    return text[start:end]
+
+
+def test_sha_tag_is_locked_on_push_and_checked_on_promotion():
+    copy, resolve = DEPLOY.split("- name: Resolve the existing ACR digest", 1)
+    push_branch, after_push = copy.split('if [ -z "$existing" ]', 1)[1].split("\n          fi\n", 1)
+    assert "write-enabled false" not in push_branch
+    assert 'az acr repository update --name "$ACR_NAME" --image "claims-agent:${IMAGE_SHA}" --write-enabled false' in after_push
+    assert after_push.index("write-enabled false") < after_push.index("cosign sign --yes")
+    assert "claims-agent@${src_digest}" not in after_push.split("cosign sign --yes", 1)[0]
+    assert "SHA tag claims-agent:${IMAGE_SHA} is not locked. Refusing to promote it." in resolve
+    assert "changeableAttributes.writeEnabled" in resolve
 
 
 def test_cd_gate_waits_for_ci_and_rejects_failures(tmp_path: Path):

@@ -11,7 +11,7 @@
 <!-- numbers:start -->
 | Measure (simulated / synthetic, stub model) | Result |
 | --- | --- |
-| Automated tests | **166** |
+| Automated tests | **167** |
 | Synthetic claims run end to end | 300 (auto_paid 107, denied_by_adjuster 48, denied_no_coverage 15, paid_after_review 130) |
 | Paused for a human adjuster | 178 of 300 |
 | Trace continuity after pod kill, shared checkpoints | 100% (178 of 178 finished on another pod) |
@@ -151,7 +151,7 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 
 ### One-time setup
 
-1. Apply Terraform (`infra/terraform`) after review. It creates two user-assigned identities. `gha_dev` may push to ACR and write only the `claims-dev` namespace. `gha_prod` may pull from ACR and write only the `claims` namespace. Both can read cluster credentials. Neither gets a client secret.
+1. Apply Terraform (`infra/terraform`) after review. It creates two deploy identities and two pod identities. `gha_dev` may push to ACR and write only the `claims-dev` namespace. `gha_prod` may pull from ACR and write only the `claims` namespace. Pods in `claims` use `claims_identity_client_id`, which also has the Key Vault, Service Bus, and Azure OpenAI data roles. Pods in `claims-dev` use `claims_dev_identity_client_id`. That identity is federated only to `system:serviceaccount:claims-dev:claims-agent` and has no role on those shared resources. Neither deploy identity gets a client secret. The registry stays Standard. Registry-wide immutable tags need Premium, which this design does not buy. The dev deploy locks each SHA tag instead. `AcrPush` includes that tag lock.
 2. In the GitHub repo settings, create environment `dev` with no required reviewers, and environment `prod` with required reviewers. Limit both environments to the `main` branch. Do this before the first prod dispatch.
 3. Set repository variables (not secrets). The client ids are identifiers.
 
@@ -164,7 +164,8 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 | `ACR_NAME` | `terraform output -raw acr_name` |
 | `AKS_NAME` | `terraform output -raw aks_name` |
 | `AKS_RESOURCE_GROUP` | `terraform output -raw resource_group_name` |
-| `CLAIMS_IDENTITY_CLIENT_ID` | optional, `terraform output -raw claims_identity_client_id` |
+| `CLAIMS_IDENTITY_CLIENT_ID` | prod pods, `terraform output -raw claims_identity_client_id` |
+| `CLAIMS_DEV_IDENTITY_CLIENT_ID` | dev pods, `terraform output -raw claims_dev_identity_client_id` |
 | `HELM_ADOPT_EXISTING` | optional `true` only for the first install onto resources Argo CD already created |
 
 4. A cluster admin applies `deploy/k8s/claims-namespace.yaml`. The deploy identities cannot create namespaces.
@@ -172,8 +173,8 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 ### How to run
 
 - A pull request runs CI only. `pytest -q` skips the actionlint test unless `actionlint` is on `PATH`. CI installs it.
-- After `container.yml` succeeds on `main`, `cd.yml` waits until the CI checks are green, verifies the cosign signature on the GHCR image that CI built, copies that digest into ACR, and refuses to overwrite the SHA tag with different bytes. It helm-upgrades namespace `claims-dev`. Helm stores release state in ConfigMaps. `APP_ENV` stays `dev`: the service rejects every token when `APP_ENV=prod`, because Entra signature checks are not implemented in the service yet.
-- Promote with **Actions → cd → Run workflow** on `main`, environment `prod`, and `image_sha` of a SHA whose dev deployment succeeded. Prod verifies the ACR digest and helm-upgrades namespace `claims`. It does not build. Required reviewers must approve. A dispatch from any other branch is rejected.
+- After `container.yml` succeeds on `main`, `cd.yml` waits until the CI checks are green, verifies the cosign signature on the GHCR image that CI built, copies that digest into ACR, and refuses a different digest on the same SHA tag. It then locks that tag (`az acr repository update --write-enabled false`) before signing the ACR image. The lock is the tag attribute only, so a later commit can still add its own SHA tag to the same digest. The dev Helm release requires `CLAIMS_DEV_IDENTITY_CLIENT_ID` and will not substitute the prod client id. Helm stores release state in ConfigMaps. `APP_ENV` stays `dev`: the service rejects every token when `APP_ENV=prod`, because Entra signature checks are not implemented in the service yet.
+- Promote with **Actions → cd → Run workflow** on `main`, environment `prod`, and `image_sha` of a SHA whose dev deployment succeeded. Prod checks that the ACR tag is locked, verifies the digest, and helm-upgrades namespace `claims` with `CLAIMS_IDENTITY_CLIENT_ID`. It does not build or push. Required reviewers must approve. A dispatch from any other branch is rejected.
 - Dev and prod share one concurrency group, so the two helm upgrades cannot overlap.
 - If the variables for that environment are unset, `cd.yml` prints `Azure CD skipped` and finishes successfully.
 - If an earlier Argo sync already created the resources, set `HELM_ADOPT_EXISTING` to `true` once. That runs `deploy/k8s/adopt-for-helm.sh`. Then unset it.

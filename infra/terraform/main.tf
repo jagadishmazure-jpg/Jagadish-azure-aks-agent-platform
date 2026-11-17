@@ -40,7 +40,11 @@ resource "azurerm_container_registry" "acr" {
   sku                           = "Standard"
   admin_enabled                 = false
   public_network_access_enabled = true
-  tags                          = var.tags
+  # Registry-wide immutable tags (policies.immutableTags) are a Premium SKU feature.
+  # This registry stays Standard. CD locks each pushed SHA tag with
+  # `az acr repository update --write-enabled false`, which Standard supports.
+  # azurerm has no resource for that per-tag data-plane lock.
+  tags = var.tags
 }
 
 resource "azurerm_kubernetes_cluster" "aks" {
@@ -102,6 +106,25 @@ resource "azurerm_federated_identity_credential" "claims" {
   audience            = ["api://AzureADTokenExchange"]
   issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
   subject             = "system:serviceaccount:claims:claims-agent"
+}
+
+# Separate from the prod claims identity so a claims-dev pod cannot present the prod token.
+# No data-plane roles: the shared Key Vault, Service Bus queue, and Azure OpenAI
+# account stay on the prod claims identity. This stack has one copy of each.
+resource "azurerm_user_assigned_identity" "claims_dev" {
+  name                = "${var.prefix}-claims-dev-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "claims_dev" {
+  name                = "claims-agent-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.claims_dev.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:claims-dev:claims-agent"
 }
 
 # Two deploy identities so a dev workflow token cannot change the prod namespace.
