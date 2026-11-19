@@ -1,0 +1,7 @@
+# Overlay for a cluster that already has the sandbox node pool from Terraform
+# (foundry_sandbox_pool_enabled = true). CD does not pass this file.
+# runtimeClassName kata-vm-isolation is the GA AKS pod-sandboxing class.
+# [verify] the Foundry preview may require kata-vm-isolation-v2 instead.
+session:
+  runtimeClassName: kata-vm-isolation
+  scheduleOnSandboxPool: true

@@ -1,0 +1,67 @@
+{{- $ids := dict -}}
+{{- range .Values.sessions }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,52}[a-z0-9])?$" .id) }}
+{{- fail (printf "session id %q must be a DNS label of at most 54 characters" .id) }}
+{{- end }}
+{{- if hasKey $ids .id }}
+{{- fail (printf "duplicate session id %q" .id) }}
+{{- end }}
+{{- $_ := set $ids .id "1" -}}
+{{- end }}
+{{- range .Values.sessions }}
+# One pod per session. restartPolicy Never so a crashed sandbox is not reused.
+# The process sleeps. The preview's agent runtime image is a separate choice. [verify]
+apiVersion: v1
+kind: Pod
+metadata:
+  name: session-{{ .id }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "foa.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: session
+    northfield.example/session-id: {{ .id | quote }}
+    {{- if $.Values.session.workloadIdentity.clientId }}
+    azure.workload.identity/use: "true"
+    {{- end }}
+spec:
+  restartPolicy: Never
+  serviceAccountName: session-sandbox
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  hostNetwork: false
+  hostPID: false
+  hostIPC: false
+  {{- if $.Values.session.runtimeClassName }}
+  runtimeClassName: {{ $.Values.session.runtimeClassName | quote }}
+  {{- end }}
+  {{- if $.Values.session.scheduleOnSandboxPool }}
+  nodeSelector:
+    workload: foundry-session
+  tolerations:
+    - { key: workload, operator: Equal, value: foundry-session, effect: NoSchedule }
+  {{- end }}
+  securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+  containers:
+    - name: sandbox
+      image: {{ include "foa.image" $.Values.session.image | quote }}
+      imagePullPolicy: {{ $.Values.session.image.pullPolicy }}
+      command: ["python", "-c", "import time; time.sleep(86400)"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [ALL] }
+      env:
+        - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+        - { name: HOME, value: /tmp }
+      resources: {{- toYaml $.Values.session.resources | nindent 8 }}
+      volumeMounts:
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: tmp
+      emptyDir:
+        {{- if eq $.Values.session.runtimeClassName "kata-vm-isolation-v2" }}
+        medium: Memory
+        {{- end }}
+        sizeLimit: {{ $.Values.session.emptyDirSize }}
+---
+{{- end }}

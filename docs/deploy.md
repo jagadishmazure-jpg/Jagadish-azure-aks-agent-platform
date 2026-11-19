@@ -23,4 +23,12 @@ The image deployed is the one `container.yml` built, scanned, and signed in GHCR
 
 `deploy/argocd/application.yaml` has no automated sync. Apply it only after disabling `.github/workflows/cd.yml`. If Argo already created the chart resources, set repository variable `HELM_ADOPT_EXISTING` to `true` for one run so `deploy/k8s/adopt-for-helm.sh` adds Helm ownership, then unset it.
 
+## Foundry sessions on the same cluster (not applied)
+
+The same deploy job can helm-upgrade `deploy/helm/foundry-on-aks` after the claims release. A cluster admin applies `deploy/k8s/foundry-namespace.yaml` first. Dev writes `foundry-sessions-dev`. Prod writes `foundry-sessions`. The chart reuses the signed claims-image digest.
+
+Set all four repository variables, or leave all four unset. Unset skips the chart and prints `Foundry-on-AKS chart skipped`. A dev run reads `FOUNDRY_MODEL_DEV_IDENTITY_CLIENT_ID` and `FOUNDRY_SESSION_DEV_IDENTITY_CLIENT_ID`. A prod run reads `FOUNDRY_MODEL_IDENTITY_CLIENT_ID` and `FOUNDRY_SESSION_IDENTITY_CLIENT_ID`. The values come from `foundry_model_identity_client_id`, `foundry_model_dev_identity_client_id`, `foundry_session_identity_client_id`, and `foundry_session_dev_identity_client_id`.
+
+The prod model identity is the one with Storage Blob Data Reader. The session identities have no Azure role. `foundry_sandbox_pool_enabled` and `foundry_gpu_pool_enabled` default to false, so validate does not describe a running GPU or Kata pool. Turn a flag on only after the [verify] list in [foundry-on-aks.md](foundry-on-aks.md). `values-aks.yaml` is an overlay for a cluster that already has the sandbox pool. CD does not pass it.
+
 `.github/workflows/azure-deploy.yml` is the reusable workflow other repositories can call.
