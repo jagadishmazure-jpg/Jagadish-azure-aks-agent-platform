@@ -1,0 +1,6 @@
+apiVersion: v2
+name: foundry-on-aks
+description: Northfield Mutual (fictional) per-session sandboxes and a mock open-weight model on AKS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

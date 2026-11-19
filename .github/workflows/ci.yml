@@ -26,6 +26,8 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           tar -xzf /tmp/actionlint.tgz -C "$HOME/.local/bin" actionlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.16.2 }
       - name: Tests (stub model; Azure OpenAI env vars are not set in CI)
         run: pytest -q
       - name: Test count
@@ -45,6 +47,9 @@ jobs:
         with: { version: v3.16.2 }
       - run: helm lint deploy/helm/claims-agent
       - run: helm template t deploy/helm/claims-agent > /dev/null && helm template t deploy/helm/claims-agent --api-versions argoproj.io/v1alpha1 > /dev/null
+      - run: helm lint deploy/helm/foundry-on-aks
+      - run: helm template foundry deploy/helm/foundry-on-aks --namespace foundry-sessions > /dev/null
+      - run: helm template foundry deploy/helm/foundry-on-aks --namespace foundry-sessions -f deploy/helm/foundry-on-aks/values-aks.yaml > /dev/null
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -91,6 +91,40 @@ resource "azurerm_role_assignment" "aks_pull" {
   principal_id         = azurerm_kubernetes_cluster.aks.kubelet_identity[0].object_id
 }
 
+# Session sandboxes need an Azure Linux pool with the Kata workload runtime.
+# Off unless foundry_sandbox_pool_enabled is true. VM size is a placeholder. [verify]
+resource "azurerm_kubernetes_cluster_node_pool" "foundry_sandbox" {
+  count                 = var.foundry_sandbox_pool_enabled ? 1 : 0
+  name                  = "fsbox"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks.id
+  vm_size               = var.foundry_sandbox_vm_size
+  node_count            = 1
+  mode                  = "User"
+  os_sku                = "AzureLinux"
+  workload_runtime      = "KataVmIsolation"
+  zones                 = ["1", "2", "3"]
+  node_labels           = { workload = "foundry-session" }
+  node_taints           = ["workload=foundry-session:NoSchedule"]
+  tags                  = var.tags
+}
+
+# Open-weight serving pool. AKS installs the driver when gpu_driver is Install.
+# Off unless foundry_gpu_pool_enabled is true. VM size is a placeholder. [verify]
+resource "azurerm_kubernetes_cluster_node_pool" "foundry_gpu" {
+  count                 = var.foundry_gpu_pool_enabled ? 1 : 0
+  name                  = "fgpu"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks.id
+  vm_size               = var.foundry_gpu_vm_size
+  node_count            = 1
+  mode                  = "User"
+  os_sku                = "Ubuntu"
+  gpu_driver            = "Install"
+  zones                 = ["1", "2", "3"]
+  node_labels           = { workload = "open-weight-model" }
+  node_taints           = ["sku=gpu:NoSchedule"]
+  tags                  = var.tags
+}
+
 # ---------- workload identity for the claims pods (no keys in pods)
 resource "azurerm_user_assigned_identity" "claims" {
   name                = "${var.prefix}-claims-id"
@@ -218,6 +252,19 @@ resource "azurerm_role_assignment" "gha_prod_aks_writer" {
   principal_id         = azurerm_user_assigned_identity.gha_prod.principal_id
 }
 
+# Foundry chart namespaces are separate from claims. A dev token cannot write prod sessions.
+resource "azurerm_role_assignment" "gha_dev_foundry_writer" {
+  scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/foundry-sessions-dev"
+  role_definition_name = "Azure Kubernetes Service RBAC Writer"
+  principal_id         = azurerm_user_assigned_identity.gha_dev.principal_id
+}
+
+resource "azurerm_role_assignment" "gha_prod_foundry_writer" {
+  scope                = "${azurerm_kubernetes_cluster.aks.id}/namespaces/foundry-sessions"
+  role_definition_name = "Azure Kubernetes Service RBAC Writer"
+  principal_id         = azurerm_user_assigned_identity.gha_prod.principal_id
+}
+
 # ---------- messaging: one broker (Service Bus) instead of a queue plus a separate log platform
 resource "azurerm_servicebus_namespace" "sb" {
   name                = "${var.prefix}-sb"
@@ -328,6 +375,82 @@ resource "azurerm_ai_foundry_project" "evals" {
   ai_services_hub_id = azurerm_ai_foundry.hub.id
   identity { type = "SystemAssigned" }
   tags = var.tags
+}
+
+# Foundry-on-AKS pod identities. There is no azurerm resource for the limited-preview
+# control plane that places hosted-agent sessions. [verify] when one is published.
+# The model identity can read blobs (weights). The session identity has no data-plane role.
+# Dev identities are federated to the dev namespace and also have no data-plane role.
+resource "azurerm_user_assigned_identity" "foundry_model" {
+  name                = "${var.prefix}-foundry-model-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "foundry_model" {
+  name                = "open-weight-model"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.foundry_model.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:foundry-sessions:open-weight-model"
+}
+
+resource "azurerm_user_assigned_identity" "foundry_model_dev" {
+  name                = "${var.prefix}-foundry-model-dev-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "foundry_model_dev" {
+  name                = "open-weight-model-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.foundry_model_dev.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:foundry-sessions-dev:open-weight-model"
+}
+
+resource "azurerm_user_assigned_identity" "foundry_session" {
+  name                = "${var.prefix}-foundry-session-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "foundry_session" {
+  name                = "session-sandbox"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.foundry_session.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:foundry-sessions:session-sandbox"
+}
+
+resource "azurerm_user_assigned_identity" "foundry_session_dev" {
+  name                = "${var.prefix}-foundry-session-dev-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "foundry_session_dev" {
+  name                = "session-sandbox-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  parent_id           = azurerm_user_assigned_identity.foundry_session_dev.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:foundry-sessions-dev:session-sandbox"
+}
+
+# Account scope is wider than one blob prefix. Tighten it when the preview
+# publishes the artifact path. [verify] The dev model identity is not a member.
+resource "azurerm_role_assignment" "foundry_model_blobs" {
+  scope                = azurerm_storage_account.foundry.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_user_assigned_identity.foundry_model.principal_id
 }
 
 # ---------- front door: Entra-authenticated edge with a managed WAF

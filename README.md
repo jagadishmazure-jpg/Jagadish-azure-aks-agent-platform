@@ -11,7 +11,7 @@
 <!-- numbers:start -->
 | Measure (simulated / synthetic, stub model) | Result |
 | --- | --- |
-| Automated tests | **167** |
+| Automated tests | **177** |
 | Synthetic claims run end to end | 300 (auto_paid 107, denied_by_adjuster 48, denied_no_coverage 15, paid_after_review 130) |
 | Paused for a human adjuster | 178 of 300 |
 | Trace continuity after pod kill, shared checkpoints | 100% (178 of 178 finished on another pod) |
@@ -54,6 +54,27 @@ flowchart LR
 ```
 
 Five gaps fixed against the common stack: see [docs/architecture.md](docs/architecture.md#five-gaps-fixed).
+
+## Foundry on your own AKS cluster (limited preview)
+
+Platform teams that already run AKS can place Foundry hosted agents and open-weight models on that cluster. The 17 November 2026 announcement calls the control plane AKS AI Manager for Foundry: developers keep the Foundry API, the `azd` flow, and the same endpoint, and each session runs in its own pod inside a lightweight VM. Source: [Run models and agents on your own Kubernetes clusters](https://techcommunity.microsoft.com/blog/appsonazureblog/run-models-and-agents-on-your-own-kubernetes-clusters-aks-at-microsoft-ignite-20/4573912).
+
+This repo models the platform half. `deploy/helm/foundry-on-aks` renders one pod per session id, a mock open-weight Deployment, and NetworkPolicies that allow a session to reach only DNS and the model. CI evaluates those policies with `helm template`. Details and the **[verify]** list: [docs/foundry-on-aks.md](docs/foundry-on-aks.md).
+
+```mermaid
+flowchart TB
+  DEV[Developers stay in Foundry<br/>same API, azd flow, and endpoint]
+  LIFE[Foundry manages agent lifecycle<br/>limited preview]
+  DEV --> LIFE
+  subgraph CLUSTER[AKS cluster the platform team operates]
+    LIFE --> SA[Session pod A]
+    LIFE --> SB[Session pod B]
+    SA --> MODEL[Mock open-weight model]
+    SB --> MODEL
+    CD[GitHub Actions CD] --> SA
+    CD --> MODEL
+  end
+```
 
 ## How it works
 
@@ -127,6 +148,8 @@ Entra ID at the edge plus claim checks in the service, dev tokens refused when `
 | Postgres checkpoint store (today: shared volume) | Planned |
 | APIM in front of AKS (Front Door chosen for now) | Planned |
 | Bicep parity, Foundry eval pipeline run, live AKS deploy | Planned (live deploy needs owner's yes and costs money) |
+| Foundry-on-AKS chart: per-session pod, mock open-weight model, NetworkPolicy | **Written**; Helm lint and offline policy tests in CI; not applied to a cluster |
+| Terraform identities, namespace RBAC, optional Kata and GPU pools for that chart | **Written, `terraform validate` only**; pools stay at count 0 |
 
 ## CI/CD with GitHub Actions
 
@@ -151,7 +174,7 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 
 ### One-time setup
 
-1. Apply Terraform (`infra/terraform`) after review. It creates two deploy identities and two pod identities. `gha_dev` may push to ACR and write only the `claims-dev` namespace. `gha_prod` may pull from ACR and write only the `claims` namespace. Pods in `claims` use `claims_identity_client_id`, which also has the Key Vault, Service Bus, and Azure OpenAI data roles. Pods in `claims-dev` use `claims_dev_identity_client_id`. That identity is federated only to `system:serviceaccount:claims-dev:claims-agent` and has no role on those shared resources. Neither deploy identity gets a client secret. The registry stays Standard. Registry-wide immutable tags need Premium, which this design does not buy. The dev deploy locks each SHA tag instead. `AcrPush` includes that tag lock.
+1. Apply Terraform (`infra/terraform`) after review. It creates two deploy identities and the pod identities. `gha_dev` may push to ACR and write only the `claims-dev` and `foundry-sessions-dev` namespaces. `gha_prod` may pull from ACR and write only the `claims` and `foundry-sessions` namespaces. Pods in `claims` use `claims_identity_client_id`, which also has the Key Vault, Service Bus, and Azure OpenAI data roles. Pods in `claims-dev` use `claims_dev_identity_client_id`. That identity is federated only to `system:serviceaccount:claims-dev:claims-agent` and has no role on those shared resources. The Foundry chart uses its own identities: only the prod model identity can read blobs, and the session identities have no Azure role. Neither deploy identity gets a client secret. The registry stays Standard. Registry-wide immutable tags need Premium, which this design does not buy. The dev deploy locks each SHA tag instead. `AcrPush` includes that tag lock.
 2. In the GitHub repo settings, create environment `dev` with no required reviewers, and environment `prod` with required reviewers. Limit both environments to the `main` branch. Do this before the first prod dispatch.
 3. Set repository variables (not secrets). The client ids are identifiers.
 
@@ -167,8 +190,12 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 | `CLAIMS_IDENTITY_CLIENT_ID` | prod pods, `terraform output -raw claims_identity_client_id` |
 | `CLAIMS_DEV_IDENTITY_CLIENT_ID` | dev pods, `terraform output -raw claims_dev_identity_client_id` |
 | `HELM_ADOPT_EXISTING` | optional `true` only for the first install onto resources Argo CD already created |
+| `FOUNDRY_MODEL_IDENTITY_CLIENT_ID` | optional; prod model pods, `terraform output -raw foundry_model_identity_client_id` |
+| `FOUNDRY_MODEL_DEV_IDENTITY_CLIENT_ID` | optional; dev model pods, `terraform output -raw foundry_model_dev_identity_client_id` |
+| `FOUNDRY_SESSION_IDENTITY_CLIENT_ID` | optional; prod session pods, `terraform output -raw foundry_session_identity_client_id` |
+| `FOUNDRY_SESSION_DEV_IDENTITY_CLIENT_ID` | optional; dev session pods, `terraform output -raw foundry_session_dev_identity_client_id` |
 
-4. A cluster admin applies `deploy/k8s/claims-namespace.yaml`. The deploy identities cannot create namespaces.
+4. A cluster admin applies `deploy/k8s/claims-namespace.yaml` and `deploy/k8s/foundry-namespace.yaml`. The deploy identities cannot create namespaces. The Foundry namespaces are `foundry-sessions-dev` and `foundry-sessions`, with restricted Pod Security Admission.
 
 ### How to run
 
@@ -177,6 +204,7 @@ The eval gate is `python scripts/run_measurements.py --check`. A fresh stub run 
 - Promote with **Actions → cd → Run workflow** on `main`, environment `prod`, and `image_sha` of a SHA whose dev deployment succeeded. Prod checks that the ACR tag is locked, verifies the digest, and helm-upgrades namespace `claims` with `CLAIMS_IDENTITY_CLIENT_ID`. It does not build or push. Required reviewers must approve. A dispatch from any other branch is rejected.
 - Dev and prod share one concurrency group, so the two helm upgrades cannot overlap.
 - If the variables for that environment are unset, `cd.yml` prints `Azure CD skipped` and finishes successfully.
+- After the claims release, the same job helm-upgrades `deploy/helm/foundry-on-aks` into `foundry-sessions-dev` or `foundry-sessions`. Both Foundry client ids for that environment must be set, or both left unset. Unset prints `Foundry-on-AKS chart skipped` and leaves the claims release in place. The chart reuses the signed claims-image digest as a stand-in process. Preview behavior is marked [verify] in [docs/foundry-on-aks.md](docs/foundry-on-aks.md).
 - If an earlier Argo sync already created the resources, set `HELM_ADOPT_EXISTING` to `true` once. That runs `deploy/k8s/adopt-for-helm.sh`. Then unset it.
 
 Another repository can call `.github/workflows/azure-deploy.yml` with `environment`, `image_sha`, `push_image`, and `namespace`, and must grant `id-token: write`. Kubelogin is `Azure/use-kubelogin`.
@@ -190,11 +218,12 @@ Argo CD (`deploy/argocd/application.yaml`) is the optional GitOps path. It does 
 - Rollback time is a simulation of the canary settings, not a measured cluster rollback.
 - Cost uses estimated tokens (chars/4) and assumed list prices.
 - Pods "killed" in the measurement are in-process service objects; the kind smoke test is where a real pod is deleted.
-- The GitHub Actions deploy workflow has not been run against a subscription. With the Azure variables unset it skips and stays green. A live run needs the identity, the environments, and a cluster admin creating the claims namespace.
+- The GitHub Actions deploy workflow has not been run against a subscription. With the Azure variables unset it skips and stays green. A live run needs the identity, the environments, and a cluster admin creating the claims namespace and the Foundry session namespaces.
+- The Foundry-on-AKS chart is a platform model of a limited preview. Policy tests are offline. The preview control plane, the real session image, and the GPU pool are not exercised here. See the [verify] list in [docs/foundry-on-aks.md](docs/foundry-on-aks.md).
 
 ## Docs
 
-[architecture](docs/architecture.md) · [how it works](docs/how-it-works.md) · [guardrails](docs/guardrails.md) · [threat model](docs/threat-model.md) · [deploy](docs/deploy.md) · [implementation guide](docs/implementation-guide.md) · [interview points](docs/interview-points.md) · [ADRs](docs/adr/)
+[architecture](docs/architecture.md) · [Foundry on AKS](docs/foundry-on-aks.md) · [how it works](docs/how-it-works.md) · [guardrails](docs/guardrails.md) · [threat model](docs/threat-model.md) · [deploy](docs/deploy.md) · [implementation guide](docs/implementation-guide.md) · [interview points](docs/interview-points.md) · [ADRs](docs/adr/)
 
 ## Related repos
 

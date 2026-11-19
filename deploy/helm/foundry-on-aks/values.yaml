@@ -1,0 +1,44 @@
+# Platform-side model of Foundry hosted agents and open-weight models on AKS.
+# The preview control plane is not installed by this chart. See docs/foundry-on-aks.md.
+# The container is the signed claims image, used as a stand-in so CD does not publish a second artifact.
+# It sleeps in session pods and serves a fixed JSON stub in the model pod. It is not an open-weight runtime.
+model:
+  image:
+    repository: nfclaimsacr.azurecr.io/claims-agent
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  modelId: northfield-open-weight-stub
+  workloadIdentity:
+    clientId: ""
+  gpu:
+    enabled: false
+    count: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+session:
+  image:
+    repository: nfclaimsacr.azurecr.io/claims-agent
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Empty on kind and in CD. Set kata-vm-isolation only on a pool with workload runtime KataVmIsolation.
+  # kata-vm-isolation-v2 is preview and forces an in-memory emptyDir. [verify] which class the Foundry preview uses.
+  runtimeClassName: ""
+  scheduleOnSandboxPool: false
+  workloadIdentity:
+    clientId: ""
+  emptyDirSize: 64Mi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+# One pod per id. CD renders the example session. A real preview controller would add an id per call. [verify]
+sessions:
+  - id: example
+quota:
+  pods: "20"
+  requestsCpu: "4"
+  requestsMemory: 8Gi
+  limitsCpu: "8"
+  limitsMemory: 16Gi

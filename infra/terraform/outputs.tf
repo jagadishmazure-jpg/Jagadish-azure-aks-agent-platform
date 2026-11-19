@@ -10,3 +10,7 @@ output "openai_endpoint" { value = azurerm_cognitive_account.aoai.endpoint }
 output "key_vault_uri" { value = azurerm_key_vault.kv.vault_uri }
 output "key_vault_name" { value = azurerm_key_vault.kv.name }
 output "frontdoor_endpoint" { value = azurerm_cdn_frontdoor_endpoint.api.host_name }
+output "foundry_model_identity_client_id" { value = azurerm_user_assigned_identity.foundry_model.client_id }
+output "foundry_model_dev_identity_client_id" { value = azurerm_user_assigned_identity.foundry_model_dev.client_id }
+output "foundry_session_identity_client_id" { value = azurerm_user_assigned_identity.foundry_session.client_id }
+output "foundry_session_dev_identity_client_id" { value = azurerm_user_assigned_identity.foundry_session_dev.client_id }
