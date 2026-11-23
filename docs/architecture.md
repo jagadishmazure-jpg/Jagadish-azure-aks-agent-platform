@@ -9,6 +9,7 @@
 | Edge and identity | Front Door Premium + managed WAF rules; Entra ID app registration, roles `Claims.Submit`, `Claims.Adjust` | HS256 dev tokens, same claim checks |
 | Runtime | AKS, workload identity, Azure CNI + network policy, Azure Policy | kind (Docker) |
 | Agents | Microsoft Agent Framework 1.x workflow in each pod | same code |
+| Foundry on AKS | Hosted-agent sessions and an open-weight model on this cluster (limited preview). Chart, identities, and network policy are written; the preview control plane is not called | Helm template plus offline policy tests |
 | Model | Azure OpenAI `gpt-4o-mini` deployment (keyless via managed identity); Foundry project for evaluations | labelled stub; OpenAI API optional |
 | Secrets | Key Vault, CSI secret store driver, federated credential | none needed |
 | Messaging | Service Bus queue `claims-intake` with dead-lettering | in-process |
@@ -32,8 +33,10 @@ The common production-stack picture is a good start. These are the five changes 
 The manifests in this repository are:
 
 - `deploy/helm/claims-agent` — the claims service (Deployment or Rollout, Service, HPA, PDB, NetworkPolicy, ServiceAccount)
+- `deploy/helm/foundry-on-aks` — per-session sandbox pods, a mock open-weight model, and NetworkPolicies that keep sessions apart ([docs/foundry-on-aks.md](foundry-on-aks.md))
 - `deploy/argocd/application.yaml` — optional manual Argo CD application, without automated sync
 - `deploy/k8s/claims-namespace.yaml` — `claims-dev` and `claims`, applied by a cluster admin before the GitHub Actions deploy
+- `deploy/k8s/foundry-namespace.yaml` — `foundry-sessions-dev` and `foundry-sessions`, restricted admission, applied by a cluster admin before the Foundry chart is upgraded
 - `deploy/kind/kind-config.yaml` — the local kind cluster
 - `deploy/observability/otel-collector.yaml` — the collector
 

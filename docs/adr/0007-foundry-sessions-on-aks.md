@@ -1,0 +1,3 @@
+# ADR 0007: Foundry sessions stay on the platform cluster
+
+Status: accepted. Foundry hosted agents and open-weight models, as described for AKS AI Manager for Foundry, run on the cluster this team already governs. The chart models the platform half: one pod per session, a mock model Service, default-deny NetworkPolicy, and a workload identity that can read blobs only for the model. The preview control plane that creates real sessions is not called from CI. Preview behavior that this repo cannot observe is marked [verify] in docs/foundry-on-aks.md. The sandbox node pool and the GPU node pool stay at count 0 until someone sets the Terraform flags.

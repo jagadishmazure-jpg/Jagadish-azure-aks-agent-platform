@@ -218,3 +218,50 @@ jobs:
             echo "rollout did not become Healthy" >&2
             exit 1
           fi
+      - name: Helm upgrade foundry-on-aks
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          FOUNDRY_MODEL_DEV_IDENTITY_CLIENT_ID: ${{ vars.FOUNDRY_MODEL_DEV_IDENTITY_CLIENT_ID }}
+          FOUNDRY_MODEL_IDENTITY_CLIENT_ID: ${{ vars.FOUNDRY_MODEL_IDENTITY_CLIENT_ID }}
+          FOUNDRY_SESSION_DEV_IDENTITY_CLIENT_ID: ${{ vars.FOUNDRY_SESSION_DEV_IDENTITY_CLIENT_ID }}
+          FOUNDRY_SESSION_IDENTITY_CLIENT_ID: ${{ vars.FOUNDRY_SESSION_IDENTITY_CLIENT_ID }}
+        run: |
+          set -eu
+          case "$DEPLOY_ENVIRONMENT" in
+            dev)
+              FOUNDRY_NS="foundry-sessions-dev"
+              MODEL_ID="$FOUNDRY_MODEL_DEV_IDENTITY_CLIENT_ID"
+              SESSION_ID="$FOUNDRY_SESSION_DEV_IDENTITY_CLIENT_ID"
+              ;;
+            prod)
+              FOUNDRY_NS="foundry-sessions"
+              MODEL_ID="$FOUNDRY_MODEL_IDENTITY_CLIENT_ID"
+              SESSION_ID="$FOUNDRY_SESSION_IDENTITY_CLIENT_ID"
+              ;;
+            *) echo "environment must be dev or prod" >&2; exit 1 ;;
+          esac
+          if [ -z "$MODEL_ID" ] && [ -z "$SESSION_ID" ]; then
+            echo "Foundry-on-AKS chart skipped. Set the Foundry workload identity client ids or leave both unset."
+            exit 0
+          fi
+          if [ -z "$MODEL_ID" ] || [ -z "$SESSION_ID" ]; then
+            echo "Set both Foundry workload identity client ids for this environment." >&2
+            exit 1
+          fi
+          printf '%s\n' "$MODEL_ID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          printf '%s\n' "$SESSION_ID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          digest=$(cat /tmp/image-digest)
+          printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          {
+            printf 'model:\n  image:\n    repository: %s.azurecr.io/claims-agent\n    digest: "%s"\n    pullPolicy: IfNotPresent\n' "$ACR_NAME" "$digest"
+            printf '  workloadIdentity:\n    clientId: "%s"\n' "$MODEL_ID"
+            printf 'session:\n  image:\n    repository: %s.azurecr.io/claims-agent\n    digest: "%s"\n    pullPolicy: IfNotPresent\n' "$ACR_NAME" "$digest"
+            printf '  workloadIdentity:\n    clientId: "%s"\n' "$SESSION_ID"
+          } > /tmp/foundry-release.yaml
+          # ConfigMap release storage: the namespace Writer role does not read Secrets.
+          # The chart does not create the namespace. A cluster admin applies deploy/k8s/foundry-namespace.yaml.
+          HELM_DRIVER=configmap helm upgrade --install foundry-on-aks deploy/helm/foundry-on-aks \
+            --namespace "$FOUNDRY_NS" \
+            --values /tmp/foundry-release.yaml \
+            --wait --timeout 5m

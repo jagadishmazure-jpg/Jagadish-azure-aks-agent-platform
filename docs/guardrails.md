@@ -13,5 +13,7 @@
 | No keys in pods; key auth off on Azure services | Terraform, Helm | `test_terraform_hardening`, `test_values_hold_no_secret` |
 | GitHub Actions deploy uses OIDC, not a client secret; ACR push and namespace-scoped AKS write | `.github/workflows/azure-deploy.yml`, Terraform | `test_deploy_uses_oidc_and_a_values_file`, `test_github_oidc_identity_is_least_privilege` |
 | Container hardening | Helm template | `test_pod_hardening` |
+| Session pods isolated from each other, from the claims namespace, and from the model except TCP 8080 | `deploy/helm/foundry-on-aks` | `test_session_policies_isolate_peers_and_allow_the_model` |
+| Session identity has no Azure data-plane role; dev Foundry identity has none either | Terraform | `test_terraform_identities_and_pools_follow_claims_split` |
 | Supply chain: pinned actions, Trivy, cosign keyless, gitleaks, CodeQL | workflows | `test_actions_pinned_to_sha`, `test_cosign_keyless` |
 | Model key never committed | `.gitignore`, `.env.example`, gitleaks | `test_env_example_has_empty_secrets`, `test_ci_has_no_model_key` |
